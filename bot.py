@@ -1018,8 +1018,9 @@ def build_auto_mail_message(
         )
 
         keyboard = code_keyboard(
-            code
-        )
+    code,
+    lang
+)
 
     else:
 
