@@ -96,4 +96,4 @@ __all__ = [
     "calculate_email_reward",
     "format_reward",
     "reward_summary",
-]
+    ]
