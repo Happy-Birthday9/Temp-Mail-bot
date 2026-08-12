@@ -843,7 +843,251 @@ async def get_messages(token):
         "/mailbox/messages",
         token
     )
+# =========================================================
+# AUTOMATIC MAIL CHECKER
+# =========================================================
 
+AUTO_CHECK_SECONDS = 3
+
+# কোন message আগে পাঠানো হয়েছে সেটা মনে রাখবে
+seen_messages = {}
+
+
+async def automatic_mail_checker(application):
+
+    logger.info("📨 Automatic mail checker started...")
+
+    while True:
+
+        try:
+
+            users = get_all_users()
+
+            for user_id in users:
+
+                mailbox = get_mailbox(user_id)
+
+                if not mailbox:
+                    continue
+
+                token = mailbox.get("token")
+
+                if not token:
+                    continue
+
+                data = await get_messages(token)
+
+                if not data:
+                    continue
+
+                messages = data.get(
+                    "messages",
+                    []
+                )
+
+                if not messages:
+                    continue
+
+                # User-এর language
+                lang = user_lang(user_id)
+
+                # User-এর আগের seen message IDs
+                user_seen = seen_messages.setdefault(
+                    user_id,
+                    set()
+                )
+
+                for item in messages:
+
+                    # -----------------------------------------
+                    # MESSAGE ID
+                    # -----------------------------------------
+
+                    message_id = (
+                        item.get("id")
+                        or item.get("messageId")
+                        or item.get("uid")
+                    )
+
+                    # ID না থাকলে message-এর অন্য unique data
+                    if not message_id:
+
+                        message_id = (
+                            str(item.get("createdAt", ""))
+                            + "|"
+                            + str(item.get("subject", ""))
+                            + "|"
+                            + str(item.get("intro", ""))
+                        )
+
+                    message_id = str(message_id)
+
+                    # -----------------------------------------
+                    # ALREADY SENT?
+                    # -----------------------------------------
+
+                    if message_id in user_seen:
+                        continue
+
+                    # আগে mark করা হবে যাতে একই mail
+                    # বারবার না যায়
+                    user_seen.add(message_id)
+
+                    # -----------------------------------------
+                    # SENDER
+                    # -----------------------------------------
+
+                    sender_data = item.get(
+                        "from",
+                        {}
+                    )
+
+                    if isinstance(
+                        sender_data,
+                        dict
+                    ):
+
+                        sender = (
+                            sender_data.get("address")
+                            or sender_data.get("name")
+                            or "Unknown"
+                        )
+
+                    else:
+
+                        sender = str(
+                            sender_data
+                        )
+
+                    # -----------------------------------------
+                    # SUBJECT
+                    # -----------------------------------------
+
+                    subject = (
+                        item.get("subject")
+                        or "(No Subject)"
+                    )
+
+                    # -----------------------------------------
+                    # DATE
+                    # -----------------------------------------
+
+                    date = (
+                        item.get("createdAt")
+                        or item.get("date")
+                        or ""
+                    )
+
+                    # -----------------------------------------
+                    # BODY
+                    # -----------------------------------------
+
+                    body = (
+                        item.get("intro")
+                        or item.get("text")
+                        or item.get("body")
+                        or ""
+                    )
+
+                    # -----------------------------------------
+                    # SEND FULL EMAIL
+                    # -----------------------------------------
+
+                    email_text = TEXT[lang][
+                        "new_mail"
+                    ].format(
+                        source="Email",
+                        sender=safe(sender),
+                        subject=safe(subject),
+                        date=safe(date),
+                        body=safe(
+                            str(body)[:700]
+                        )
+                    )
+
+                    try:
+
+                        await application.bot.send_message(
+                            chat_id=user_id,
+                            text=email_text,
+                            parse_mode="HTML"
+                        )
+
+                    except Exception as error:
+
+                        logger.error(
+                            "Could not send email to %s: %s",
+                            user_id,
+                            error
+                        )
+
+                        continue
+
+                    # -----------------------------------------
+                    # EXTRACT VERIFICATION CODE
+                    # -----------------------------------------
+
+                    code = extract_code(
+                        str(body)
+                    )
+
+                    if code:
+
+                        try:
+
+                            await application.bot.send_message(
+                                chat_id=user_id,
+                                text=TEXT[lang][
+                                    "verification"
+                                ].format(
+                                    code=safe(code)
+                                ),
+                                reply_markup=code_keyboard(
+                                    code
+                                ),
+                                parse_mode="HTML"
+                            )
+
+                            logger.info(
+                                "📩 Code %s sent automatically to %s",
+                                code,
+                                user_id
+                            )
+
+                        except Exception as error:
+
+                            logger.error(
+                                "Could not send code to %s: %s",
+                                user_id,
+                                error
+                            )
+
+            # -----------------------------------------
+            # WAIT
+            # -----------------------------------------
+
+            await asyncio.sleep(
+                AUTO_CHECK_SECONDS
+            )
+
+        except asyncio.CancelledError:
+
+            logger.info(
+                "Automatic mail checker stopped."
+            )
+
+            raise
+
+        except Exception as error:
+
+            logger.exception(
+                "Automatic mail checker error: %s",
+                error
+            )
+
+            await asyncio.sleep(
+                AUTO_CHECK_SECONDS
+                )
 
 # =========================================================
 # NORMALIZE MESSAGE LIST
