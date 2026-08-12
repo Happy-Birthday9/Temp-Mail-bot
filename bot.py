@@ -2,7 +2,6 @@ import asyncio
 import html
 import logging
 import re
-from typing import Any
 
 import aiohttp
 
@@ -38,8 +37,9 @@ from database import (
 
 API_BASE = "https://smails.dev/api"
 
-# Automatic inbox check interval
-POLL_SECONDS = 4
+# Check new mail every 2 seconds.
+# Actual delivery time still depends on the sender.
+WATCH_INTERVAL = 2
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -50,23 +50,7 @@ logger = logging.getLogger(__name__)
 
 
 # =========================================================
-# RUNTIME MAILBOX CACHE
-# =========================================================
-
-# {
-#   user_id: {
-#       "token": "...",
-#       "seen": {"message-id-1", "message-id-2"}
-#   }
-# }
-
-MAILBOX_CACHE = {}
-
-CACHE_LOCK = asyncio.Lock()
-
-
-# =========================================================
-# LANGUAGE TEXT
+# LANGUAGES
 # =========================================================
 
 TEXT = {
@@ -116,7 +100,7 @@ TEXT = {
             "❌ <b>Something went wrong.</b>\n\n"
             "Please try again later.",
 
-        "new_email":
+        "new_mail":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "       📨 <b>NEW EMAIL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
@@ -127,16 +111,21 @@ TEXT = {
             "💬 <b>Message:</b>\n"
             "{body}",
 
-        "code":
-            "🔐 <b>VERIFICATION CODE</b>\n\n"
+        "verification":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "   🔐 <b>VERIFICATION CODE</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "🔢 <b>Code:</b>\n"
             "<code>{code}</code>\n\n"
-            "📋 Press and hold the code to copy it.",
+            "👇 Tap the button below to copy/view the code.",
 
         "copy_code":
             "📋 Copy Code",
 
-        "code_popup":
-            "📋 Verification Code\n\n{code}",
+        "code_copied":
+            "📋 <b>Verification Code</b>\n\n"
+            "<code>{code}</code>\n\n"
+            "Press and hold the code to copy it.",
 
         "refresh_done":
             "🔄 <b>Inbox refreshed!</b>\n\n"
@@ -235,7 +224,7 @@ TEXT = {
             "❌ <b>সমস্যা হয়েছে।</b>\n\n"
             "কিছুক্ষণ পর আবার চেষ্টা করুন।",
 
-        "new_email":
+        "new_mail":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "       📨 <b>নতুন EMAIL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
@@ -246,16 +235,21 @@ TEXT = {
             "💬 <b>Message:</b>\n"
             "{body}",
 
-        "code":
-            "🔐 <b>VERIFICATION CODE</b>\n\n"
+        "verification":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "   🔐 <b>VERIFICATION CODE</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "🔢 <b>Code:</b>\n"
             "<code>{code}</code>\n\n"
-            "📋 Code-এর উপর চাপ দিয়ে ধরে রাখলে Copy করতে পারবেন।",
+            "👇 Code copy/view করতে নিচের Button চাপুন।",
 
         "copy_code":
-            "📋 Code Copy",
+            "📋 Code Copy করুন",
 
-        "code_popup":
-            "📋 Verification Code\n\n{code}",
+        "code_copied":
+            "📋 <b>Verification Code</b>\n\n"
+            "<code>{code}</code>\n\n"
+            "Code-এর উপর চাপ দিয়ে ধরে রাখলে Copy করতে পারবেন।",
 
         "refresh_done":
             "🔄 <b>Inbox Refresh হয়েছে!</b>\n\n"
@@ -354,7 +348,7 @@ TEXT = {
             "❌ <b>Kuch problem ho gayi.</b>\n\n"
             "Thodi der baad dobara try karein.",
 
-        "new_email":
+        "new_mail":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "       📨 <b>NEW EMAIL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
@@ -365,16 +359,21 @@ TEXT = {
             "💬 <b>Message:</b>\n"
             "{body}",
 
-        "code":
-            "🔐 <b>VERIFICATION CODE</b>\n\n"
+        "verification":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "   🔐 <b>VERIFICATION CODE</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "🔢 <b>Code:</b>\n"
             "<code>{code}</code>\n\n"
-            "📋 Code par press karke hold karein aur Copy karein.",
+            "👇 Code ko copy/view karne ke liye button dabayein.",
 
         "copy_code":
             "📋 Copy Code",
 
-        "code_popup":
-            "📋 Verification Code\n\n{code}",
+        "code_copied":
+            "📋 <b>Verification Code</b>\n\n"
+            "<code>{code}</code>\n\n"
+            "Code par press karke hold karein aur Copy karein.",
 
         "refresh_done":
             "🔄 <b>Inbox refresh ho gaya!</b>\n\n"
@@ -520,208 +519,44 @@ def is_admin(user_id):
     return user_id in ADMIN_IDS
 
 
-def clean_html(text):
-
-    if not text:
-        return ""
-
-    text = re.sub(
-        r"<style.*?</style>",
-        " ",
-        text,
-        flags=re.I | re.S
-    )
-
-    text = re.sub(
-        r"<script.*?</script>",
-        " ",
-        text,
-        flags=re.I | re.S
-    )
-
-    text = re.sub(
-        r"<[^>]+>",
-        " ",
-        text
-    )
-
-    text = html.unescape(text)
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
-
-    return text.strip()
-
-
 def extract_code(text):
 
     if not text:
         return None
 
-    text = clean_html(text)
-
-    # Highest priority:
-    # OTP / verification / code + number
-    priority_patterns = [
-
-        r"(?:verification|verify|verification\s+code)"
-        r"\D{0,30}([0-9]{4,8})",
-
-        r"(?:otp|one[-\s]?time\s+password)"
-        r"\D{0,30}([0-9]{4,8})",
-
-        r"(?:security\s+code|login\s+code)"
-        r"\D{0,30}([0-9]{4,8})",
-
-        r"(?:code)"
-        r"\D{0,20}([0-9]{4,8})",
+    # Prefer codes near common verification keywords.
+    keyword_patterns = [
+        r"(?:code|otp|verification|verify|pin)[^\d]{0,30}(\d{4,8})",
+        r"(\d{4,8})[^\d]{0,30}(?:code|otp|verification|verify|pin)",
     ]
 
-    for pattern in priority_patterns:
+    for pattern in keyword_patterns:
 
         match = re.search(
             pattern,
             text,
-            re.I
+            re.IGNORECASE
         )
 
         if match:
-
             return match.group(1)
 
+    # Fallback: 6, 5, then 4 digit code.
+    for length in (6, 5, 4):
 
-    # Common 6-digit OTP
-    matches = re.findall(
-        r"(?<!\d)\d{6}(?!\d)",
-        text
-    )
+        match = re.search(
+            rf"\b\d{{{length}}}\b",
+            text
+        )
 
-    if matches:
-
-        return matches[0]
-
-
-    # 4 or 5 digit code
-    matches = re.findall(
-        r"(?<!\d)\d{4,5}(?!\d)",
-        text
-    )
-
-    if matches:
-
-        return matches[0]
-
+        if match:
+            return match.group(0)
 
     return None
 
 
-def message_list(data):
-
-    if not data:
-        return []
-
-    if isinstance(data, list):
-        return data
-
-    if isinstance(data, dict):
-
-        for key in (
-            "messages",
-            "data",
-            "items",
-            "results"
-        ):
-
-            value = data.get(key)
-
-            if isinstance(value, list):
-
-                return value
-
-    return []
-
-
-def get_message_id(item):
-
-    if not isinstance(item, dict):
-        return None
-
-    return (
-        item.get("id")
-        or item.get("_id")
-        or item.get("messageId")
-    )
-
-
-def get_sender(item):
-
-    sender = (
-        item.get("from")
-        or item.get("sender")
-        or ""
-    )
-
-    if isinstance(sender, dict):
-
-        return (
-            sender.get("address")
-            or sender.get("email")
-            or sender.get("name")
-            or "Unknown"
-        )
-
-    return str(sender)
-
-
-def get_subject(item):
-
-    return (
-        item.get("subject")
-        or "(No Subject)"
-    )
-
-
-def get_date(item):
-
-    return (
-        item.get("createdAt")
-        or item.get("date")
-        or item.get("receivedAt")
-        or ""
-    )
-
-
-def get_body(item):
-
-    if not isinstance(item, dict):
-        return ""
-
-    body = (
-        item.get("text")
-        or item.get("body")
-        or item.get("content")
-        or item.get("html")
-        or item.get("intro")
-        or ""
-    )
-
-    if isinstance(body, dict):
-
-        body = (
-            body.get("text")
-            or body.get("content")
-            or body.get("html")
-            or ""
-        )
-
-    return clean_html(str(body))
-
-
 # =========================================================
-# HTTP API
+# API
 # =========================================================
 
 async def api_request(
@@ -743,7 +578,7 @@ async def api_request(
         )
 
     timeout = aiohttp.ClientTimeout(
-        total=10
+        total=8
     )
 
     try:
@@ -758,36 +593,22 @@ async def api_request(
                 headers=headers
             ) as response:
 
-                text = await response.text()
-
                 if response.status >= 400:
 
                     logger.error(
-                        "Smails API %s %s: %s",
+                        "API HTTP %s: %s",
                         response.status,
-                        endpoint,
-                        text[:500]
+                        endpoint
                     )
 
                     return None
 
-                try:
-
-                    return await response.json()
-
-                except Exception:
-
-                    logger.error(
-                        "Invalid JSON from Smails: %s",
-                        text[:500]
-                    )
-
-                    return None
+                return await response.json()
 
     except Exception as error:
 
         logger.error(
-            "API request error: %s",
+            "API error: %s",
             error
         )
 
@@ -802,7 +623,7 @@ async def create_mailbox():
     )
 
 
-async def list_messages(token):
+async def get_messages(token):
 
     return await api_request(
         "GET",
@@ -811,7 +632,7 @@ async def list_messages(token):
     )
 
 
-async def read_message(
+async def get_message(
     token,
     message_id
 ):
@@ -824,77 +645,131 @@ async def read_message(
 
 
 # =========================================================
-# LOAD FULL MESSAGE
+# MESSAGE PARSER
 # =========================================================
 
-async def get_full_message(
+async def prepare_message(
     token,
     item
 ):
 
-    message_id = get_message_id(item)
-
-    if not message_id:
-
-        return item
-
-    full = await read_message(
-        token,
-        message_id
+    message_id = (
+        item.get("id")
+        or item.get("messageId")
     )
 
+    full = None
+
+    # IMPORTANT:
+    # List endpoint may only return preview.
+    # Fetch the full message using its ID.
+    if message_id:
+
+        full = await get_message(
+            token,
+            message_id
+        )
+
     if not full:
+        full = item
 
-        return item
+    sender_data = full.get(
+        "from",
+        item.get("from", {})
+    )
 
-    if isinstance(full, dict):
+    if isinstance(
+        sender_data,
+        dict
+    ):
 
-        # Some APIs return {"message": {...}}
-        if isinstance(
-            full.get("message"),
-            dict
-        ):
+        sender = (
+            sender_data.get("address")
+            or sender_data.get("name")
+            or "Unknown"
+        )
 
-            return full["message"]
+    else:
 
-    return full
+        sender = str(sender_data)
+
+    subject = (
+        full.get("subject")
+        or item.get("subject")
+        or "(No Subject)"
+    )
+
+    date = (
+        full.get("createdAt")
+        or full.get("date")
+        or item.get("createdAt")
+        or item.get("date")
+        or ""
+    )
+
+    body = (
+        full.get("text")
+        or full.get("body")
+        or full.get("html")
+        or full.get("intro")
+        or item.get("intro")
+        or ""
+    )
+
+    # HTML can contain tags. Remove basic tags before code extraction.
+    plain_body = re.sub(
+        r"<[^>]+>",
+        " ",
+        str(body)
+    )
+
+    plain_body = html.unescape(
+        plain_body
+    )
+
+    code = extract_code(
+        plain_body
+    )
+
+    return {
+        "id": str(message_id or ""),
+        "sender": sender,
+        "subject": subject,
+        "date": date,
+        "body": plain_body,
+        "code": code,
+    }
 
 
 # =========================================================
-# SEND EMAIL TO TELEGRAM
+# SEND MAIL
 # =========================================================
 
-async def send_email_message(
+async def send_mail_to_user(
     bot,
     chat_id,
     lang,
-    item
+    parsed
 ):
 
     t = TEXT[lang]
 
-    sender = get_sender(item)
-
-    subject = get_subject(item)
-
-    date = get_date(item)
-
-    body = get_body(item)
-
-    if not body:
-
-        body = "(No readable message body)"
-
-    body = body[:2500]
-
     message_text = t[
-        "new_email"
+        "new_mail"
     ].format(
-        source="Email",
-        sender=safe(sender),
-        subject=safe(subject),
-        date=safe(date),
-        body=safe(body)
+        source="Smails",
+        sender=safe(
+            parsed["sender"]
+        ),
+        subject=safe(
+            parsed["subject"]
+        ),
+        date=safe(
+            parsed["date"]
+        ),
+        body=safe(
+            parsed["body"][:1200]
+        )
     )
 
     await bot.send_message(
@@ -903,21 +778,15 @@ async def send_email_message(
         parse_mode="HTML"
     )
 
-    # Detect verification code
-    code = extract_code(body)
-
-    # If code is in subject instead
-    if not code:
-
-        code = extract_code(
-            subject
-        )
+    code = parsed.get("code")
 
     if code:
 
         await bot.send_message(
             chat_id=chat_id,
-            text=t["code"].format(
+            text=t[
+                "verification"
+            ].format(
                 code=safe(code)
             ),
             reply_markup=code_keyboard(
@@ -926,56 +795,222 @@ async def send_email_message(
             parse_mode="HTML"
         )
 
-    return code
-
 
 # =========================================================
-# PREPARE EXISTING MESSAGES
+# SHOW INBOX
 # =========================================================
 
-async def initialize_seen(
+async def show_inbox(
+    message,
     user_id,
-    token
+    lang
 ):
 
-    data = await list_messages(
-        token
+    t = TEXT[lang]
+
+    mailbox = get_mailbox(
+        user_id
     )
 
-    items = message_list(data)
+    if not mailbox:
 
-    seen = set()
-
-    for item in items:
-
-        message_id = get_message_id(
-            item
+        await message.reply_text(
+            t["no_mailbox"],
+            reply_markup=main_keyboard(lang),
+            parse_mode="HTML"
         )
 
-        if message_id:
+        return
 
-            seen.add(
-                str(message_id)
+    loading = await message.reply_text(
+        t["checking"],
+        parse_mode="HTML"
+    )
+
+    data = await get_messages(
+        mailbox["token"]
+    )
+
+    if not data:
+
+        await loading.edit_text(
+            t["api_error"],
+            parse_mode="HTML"
+        )
+
+        return
+
+    messages = data.get(
+        "messages",
+        []
+    )
+
+    if not messages:
+
+        await loading.edit_text(
+            t["empty"],
+            reply_markup=main_keyboard(lang),
+            parse_mode="HTML"
+        )
+
+        return
+
+    await loading.delete()
+
+    # Fetch FULL messages.
+    for item in messages[:10]:
+
+        try:
+
+            parsed = await prepare_message(
+                mailbox["token"],
+                item
             )
 
-    async with CACHE_LOCK:
+            await send_mail_to_user(
+                message.get_bot(),
+                message.chat_id,
+                lang,
+                parsed
+            )
 
-        MAILBOX_CACHE[
-            user_id
-        ] = {
-            "token": token,
-            "seen": seen
-        }
+        except Exception as error:
 
-    logger.info(
-        "Mailbox initialized user=%s existing=%s",
-        user_id,
-        len(seen)
-    )
+            logger.error(
+                "Inbox message error: %s",
+                error
+            )
 
 
 # =========================================================
-# GENERATE NEW MAILBOX
+# AUTOMATIC MAIL WATCHER
+# =========================================================
+
+async def mailbox_watcher(
+    application
+):
+
+    logger.info(
+        "📡 Automatic mail watcher started."
+    )
+
+    while True:
+
+        try:
+
+            users = get_all_users()
+
+            for user_id in users:
+
+                try:
+
+                    mailbox = get_mailbox(
+                        user_id
+                    )
+
+                    if not mailbox:
+                        continue
+
+                    token = mailbox["token"]
+
+                    data = await get_messages(
+                        token
+                    )
+
+                    if not data:
+                        continue
+
+                    messages = data.get(
+                        "messages",
+                        []
+                    )
+
+                    if not messages:
+                        continue
+
+                    lang = user_lang(
+                        user_id
+                    )
+
+                    # Store processed IDs in application memory.
+                    processed = application.bot_data.setdefault(
+                        "processed_messages",
+                        set()
+                    )
+
+                    for item in reversed(
+                        messages[:20]
+                    ):
+
+                        message_id = str(
+                            item.get("id")
+                            or item.get("messageId")
+                            or ""
+                        )
+
+                        if not message_id:
+                            continue
+
+                        if message_id in processed:
+                            continue
+
+                        parsed = await prepare_message(
+                            token,
+                            item
+                        )
+
+                        await send_mail_to_user(
+                            application.bot,
+                            user_id,
+                            lang,
+                            parsed
+                        )
+
+                        processed.add(
+                            message_id
+                        )
+
+                    # Prevent unlimited memory growth.
+                    if len(processed) > 5000:
+
+                        application.bot_data[
+                            "processed_messages"
+                        ] = set(
+                            list(processed)[-2000:]
+                        )
+
+                except Exception as error:
+
+                    logger.error(
+                        "Watcher user error %s: %s",
+                        user_id,
+                        error
+                    )
+
+            await asyncio.sleep(
+                WATCH_INTERVAL
+            )
+
+        except asyncio.CancelledError:
+
+            logger.info(
+                "Mail watcher stopped."
+            )
+
+            return
+
+        except Exception as error:
+
+            logger.error(
+                "Watcher error: %s",
+                error
+            )
+
+            await asyncio.sleep(3)
+
+
+# =========================================================
+# GENERATE
 # =========================================================
 
 async def generate_new(
@@ -1002,14 +1037,14 @@ async def generate_new(
 
         return
 
-
     email = (
         mailbox.get("address")
         or mailbox.get("email")
     )
 
-    token = mailbox.get("token")
-
+    token = mailbox.get(
+        "token"
+    )
 
     if not email or not token:
 
@@ -1020,309 +1055,22 @@ async def generate_new(
 
         return
 
-
     save_mailbox(
         user_id,
         email,
         token
     )
 
-
-    # Important:
-    # Existing inbox messages are marked as seen.
-    # Only future messages will be automatically sent.
-    await initialize_seen(
-        user_id,
-        token
-    )
-
-
+    # New mailbox = don't send old messages.
+    # Watcher will detect only future messages.
     await loading.edit_text(
         t["created"].format(
             email=safe(email)
         ),
-        reply_markup=main_keyboard(lang),
+        reply_markup=main_keyboard(
+            lang
+        ),
         parse_mode="HTML"
-    )
-
-
-# =========================================================
-# INBOX
-# =========================================================
-
-async def show_inbox(
-    bot,
-    chat_id,
-    user_id,
-    lang
-):
-
-    t = TEXT[lang]
-
-    mailbox = get_mailbox(
-        user_id
-    )
-
-    if not mailbox:
-
-        await bot.send_message(
-            chat_id=chat_id,
-            text=t["no_mailbox"],
-            reply_markup=main_keyboard(lang),
-            parse_mode="HTML"
-        )
-
-        return
-
-
-    loading = await bot.send_message(
-        chat_id=chat_id,
-        text=t["checking"],
-        parse_mode="HTML"
-    )
-
-
-    data = await list_messages(
-        mailbox["token"]
-    )
-
-    if not data:
-
-        await loading.edit_text(
-            t["api_error"],
-            parse_mode="HTML"
-        )
-
-        return
-
-
-    items = message_list(data)
-
-
-    await loading.delete()
-
-
-    if not items:
-
-        await bot.send_message(
-            chat_id=chat_id,
-            text=t["empty"],
-            reply_markup=main_keyboard(lang),
-            parse_mode="HTML"
-        )
-
-        return
-
-
-    for item in items[:20]:
-
-        full_item = await get_full_message(
-            mailbox["token"],
-            item
-        )
-
-        try:
-
-            await send_email_message(
-                bot,
-                chat_id,
-                lang,
-                full_item
-            )
-
-        except Exception as error:
-
-            logger.error(
-                "Inbox message error: %s",
-                error
-            )
-
-
-# =========================================================
-# AUTOMATIC MAIL CHECKER
-# =========================================================
-
-async def automatic_mail_checker(
-    application
-):
-
-    logger.info(
-        "📡 Automatic mail checker started"
-    )
-
-
-    while True:
-
-        try:
-
-            # Make a snapshot so dictionary changes
-            # don't break iteration.
-            async with CACHE_LOCK:
-
-                mailboxes = list(
-                    MAILBOX_CACHE.items()
-                )
-
-
-            for user_id, info in mailboxes:
-
-                token = info.get(
-                    "token"
-                )
-
-                if not token:
-                    continue
-
-
-                try:
-
-                    data = await list_messages(
-                        token
-                    )
-
-                    if not data:
-                        continue
-
-
-                    items = message_list(
-                        data
-                    )
-
-
-                    async with CACHE_LOCK:
-
-                        cache = MAILBOX_CACHE.get(
-                            user_id
-                        )
-
-                        if not cache:
-                            continue
-
-                        seen = cache[
-                            "seen"
-                        ]
-
-
-                    for item in items:
-
-                        message_id = get_message_id(
-                            item
-                        )
-
-                        if not message_id:
-                            continue
-
-
-                        message_id = str(
-                            message_id
-                        )
-
-
-                        # Already sent
-                        if message_id in seen:
-                            continue
-
-
-                        # Mark seen BEFORE sending.
-                        # This prevents duplicate messages
-                        # if Telegram/API is slow.
-                        async with CACHE_LOCK:
-
-                            cache = MAILBOX_CACHE.get(
-                                user_id
-                            )
-
-                            if not cache:
-                                continue
-
-                            if message_id in cache["seen"]:
-                                continue
-
-                            cache["seen"].add(
-                                message_id
-                            )
-
-
-                        # Read full email
-                        full_item = await get_full_message(
-                            token,
-                            item
-                        )
-
-
-                        lang = user_lang(
-                            user_id
-                        )
-
-
-                        # Automatically send email
-                        await send_email_message(
-                            application.bot,
-                            user_id,
-                            lang,
-                            full_item
-                        )
-
-
-                        logger.info(
-                            "📨 New mail sent to user=%s id=%s",
-                            user_id,
-                            message_id
-                        )
-
-
-                except Exception as error:
-
-                    logger.error(
-                        "Checker user=%s error: %s",
-                        user_id,
-                        error
-                    )
-
-
-            await asyncio.sleep(
-                POLL_SECONDS
-            )
-
-
-        except asyncio.CancelledError:
-
-            logger.info(
-                "Automatic checker stopped"
-            )
-
-            break
-
-
-        except Exception as error:
-
-            logger.error(
-                "Checker error: %s",
-                error
-            )
-
-            await asyncio.sleep(
-                POLL_SECONDS
-            )
-
-
-# =========================================================
-# STARTUP
-# =========================================================
-
-async def post_init(
-    application
-):
-
-    # Start automatic background checker
-    application.create_task(
-        automatic_mail_checker(
-            application
-        )
-    )
-
-    logger.info(
-        "🤖 Bot startup complete"
     )
 
 
@@ -1346,7 +1094,6 @@ async def start(
         user.id
     )
 
-
     if not lang:
 
         await update.message.reply_text(
@@ -1356,7 +1103,6 @@ async def start(
         )
 
         return
-
 
     await generate_new(
         update.message,
@@ -1374,15 +1120,16 @@ async def inbox_command(
     context
 ):
 
-    user_id = update.effective_user.id
+    user_id = (
+        update.effective_user.id
+    )
 
     lang = user_lang(
         user_id
     )
 
     await show_inbox(
-        context.bot,
-        update.effective_chat.id,
+        update.message,
         user_id,
         lang
     )
@@ -1393,11 +1140,15 @@ async def refresh_command(
     context
 ):
 
-    user_id = update.effective_user.id
+    user_id = (
+        update.effective_user.id
+    )
 
     lang = user_lang(
         user_id
     )
+
+    t = TEXT[lang]
 
     mailbox = get_mailbox(
         user_id
@@ -1406,41 +1157,55 @@ async def refresh_command(
     if not mailbox:
 
         await update.message.reply_text(
-            TEXT[lang]["no_mailbox"],
+            t["no_mailbox"],
             reply_markup=main_keyboard(lang),
             parse_mode="HTML"
         )
 
         return
 
-
-    data = await list_messages(
+    data = await get_messages(
         mailbox["token"]
     )
-
 
     if not data:
 
         await update.message.reply_text(
-            TEXT[lang]["api_error"],
+            t["api_error"],
             parse_mode="HTML"
         )
 
         return
 
-
-    items = message_list(
-        data
+    messages = data.get(
+        "messages",
+        []
     )
 
-
     await update.message.reply_text(
-        TEXT[lang]["refresh_done"].format(
-            count=len(items)
+        t["refresh_done"].format(
+            count=len(messages)
         ),
         reply_markup=main_keyboard(lang),
         parse_mode="HTML"
     )
+
+    # Also show actual messages.
+    if messages:
+
+        for item in messages[:10]:
+
+            parsed = await prepare_message(
+                mailbox["token"],
+                item
+            )
+
+            await send_mail_to_user(
+                context.bot,
+                update.effective_chat.id,
+                lang,
+                parsed
+            )
 
 
 async def language_command(
@@ -1448,7 +1213,9 @@ async def language_command(
     context
 ):
 
-    user_id = update.effective_user.id
+    user_id = (
+        update.effective_user.id
+    )
 
     lang = user_lang(
         user_id
@@ -1466,7 +1233,9 @@ async def help_command(
     context
 ):
 
-    user_id = update.effective_user.id
+    user_id = (
+        update.effective_user.id
+    )
 
     lang = user_lang(
         user_id
@@ -1484,7 +1253,9 @@ async def about_command(
     context
 ):
 
-    user_id = update.effective_user.id
+    user_id = (
+        update.effective_user.id
+    )
 
     lang = user_lang(
         user_id
@@ -1504,7 +1275,9 @@ async def admin_only(
     update
 ):
 
-    user_id = update.effective_user.id
+    user_id = (
+        update.effective_user.id
+    )
 
     lang = user_lang(
         user_id
@@ -1525,12 +1298,9 @@ async def admin_command(
         update.effective_user.id
     ):
 
-        await admin_only(
-            update
-        )
+        await admin_only(update)
 
         return
-
 
     lang = user_lang(
         update.effective_user.id
@@ -1551,17 +1321,13 @@ async def broadcast_command(
         update.effective_user.id
     ):
 
-        await admin_only(
-            update
-        )
+        await admin_only(update)
 
         return
-
 
     lang = user_lang(
         update.effective_user.id
     )
-
 
     if not context.args:
 
@@ -1572,17 +1338,14 @@ async def broadcast_command(
 
         return
 
-
     broadcast_text = " ".join(
         context.args
     )
-
 
     users = get_all_users()
 
     sent = 0
     failed = 0
-
 
     for user_id in users:
 
@@ -1603,7 +1366,6 @@ async def broadcast_command(
         except Exception:
 
             failed += 1
-
 
     await update.message.reply_text(
         TEXT[lang]["broadcast_done"].format(
@@ -1644,18 +1406,15 @@ async def callback_handler(
         if lang not in TEXT:
             lang = "en"
 
-
         set_language(
             user_id,
             lang
         )
 
-
         await query.edit_message_text(
             TEXT[lang]["language_ok"],
             parse_mode="HTML"
         )
-
 
         await generate_new(
             query.message,
@@ -1692,8 +1451,7 @@ async def callback_handler(
         )
 
         await show_inbox(
-            context.bot,
-            query.message.chat_id,
+            query.message,
             user_id,
             lang
         )
@@ -1723,11 +1481,9 @@ async def callback_handler(
 
             return
 
-
-        data_result = await list_messages(
+        data_result = await get_messages(
             mailbox["token"]
         )
-
 
         if not data_result:
 
@@ -1738,19 +1494,33 @@ async def callback_handler(
 
             return
 
-
-        items = message_list(
-            data_result
+        messages = data_result.get(
+            "messages",
+            []
         )
-
 
         await query.message.reply_text(
             TEXT[lang]["refresh_done"].format(
-                count=len(items)
+                count=len(messages)
             ),
             reply_markup=main_keyboard(lang),
             parse_mode="HTML"
         )
+
+        # Show full mail + code.
+        for item in messages[:10]:
+
+            parsed = await prepare_message(
+                mailbox["token"],
+                item
+            )
+
+            await send_mail_to_user(
+                context.bot,
+                query.message.chat_id,
+                lang,
+                parsed
+            )
 
         return
 
@@ -1769,13 +1539,32 @@ async def callback_handler(
         )
 
         await query.answer(
-            TEXT[lang]["code_popup"].format(
-                code=code
+            TEXT[lang][
+                "code_copied"
+            ].format(
+                code=safe(code)
             ),
             show_alert=True
         )
 
         return
+
+
+# =========================================================
+# POST INIT
+# =========================================================
+
+async def post_init(
+    application
+):
+
+    # Start automatic inbox watcher
+    # after Telegram application starts.
+    application.create_task(
+        mailbox_watcher(
+            application
+        )
+    )
 
 
 # =========================================================
@@ -1788,7 +1577,7 @@ async def error_handler(
 ):
 
     logger.error(
-        "Unhandled error:",
+        "Unhandled error",
         exc_info=context.error
     )
 
@@ -1801,14 +1590,12 @@ def main():
 
     init_db()
 
-
     application = (
         Application.builder()
         .token(BOT_TOKEN)
         .post_init(post_init)
         .build()
     )
-
 
     application.add_handler(
         CommandHandler(
@@ -1817,14 +1604,12 @@ def main():
         )
     )
 
-
     application.add_handler(
         CommandHandler(
             "inbox",
             inbox_command
         )
     )
-
 
     application.add_handler(
         CommandHandler(
@@ -1833,14 +1618,12 @@ def main():
         )
     )
 
-
     application.add_handler(
         CommandHandler(
             "language",
             language_command
         )
     )
-
 
     application.add_handler(
         CommandHandler(
@@ -1849,14 +1632,12 @@ def main():
         )
     )
 
-
     application.add_handler(
         CommandHandler(
             "about",
             about_command
         )
     )
-
 
     application.add_handler(
         CommandHandler(
@@ -1865,14 +1646,12 @@ def main():
         )
     )
 
-
     application.add_handler(
         CommandHandler(
             "broadcast",
             broadcast_command
         )
     )
-
 
     application.add_handler(
         CommandHandler(
@@ -1881,18 +1660,15 @@ def main():
         )
     )
 
-
     application.add_handler(
         CallbackQueryHandler(
             callback_handler
         )
     )
 
-
     application.add_error_handler(
         error_handler
     )
-
 
     print(
         "🤖 Temp Mail Bot is running..."
@@ -1904,5 +1680,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()
