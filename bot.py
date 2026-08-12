@@ -1,49 +1,50 @@
+# bot.py
+
+import asyncio
+import html
 import logging
 import re
-import html
+
 import aiohttp
 
 from telegram import (
     Update,
     InlineKeyboardButton,
-    InlineKeyboardMarkup
+    InlineKeyboardMarkup,
 )
 
 from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
-    ContextTypes
+    ContextTypes,
 )
 
 from config import BOT_TOKEN, ADMIN_IDS
+
 from database import (
     init_db,
+    save_user,
     get_language,
     set_language,
     save_mailbox,
     get_mailbox,
-    save_user
+    get_all_users,
 )
 
 
 # =========================================================
-# LOGGING
+# SETTINGS
 # =========================================================
 
+API_BASE = "https://smails.dev/api"
+
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
 )
 
 logger = logging.getLogger(__name__)
-
-
-# =========================================================
-# API
-# =========================================================
-
-SMAILS_API = "https://smails.dev/api"
 
 
 # =========================================================
@@ -56,17 +57,22 @@ TEXT = {
 
         "welcome":
             "👋 <b>Welcome to Temp Mail Bot!</b>\n\n"
-            "Please select your preferred language:",
+            "Select your preferred language:",
 
-        "language_success":
+        "language_ok":
             "✅ <b>Language selected successfully!</b>",
 
-        "mail_created":
-            "🎉 <b>Temporary Email Created!</b>\n\n"
-            "📧 <b>Your Email:</b>\n"
+        "generating":
+            "⚡ <b>Creating your temporary email...</b>",
+
+        "created":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "   📧 <b>NEW TEMP EMAIL</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "📮 <b>Email:</b>\n"
             "<code>{email}</code>\n\n"
-            "⏳ <b>Status:</b> Active\n\n"
-            "You can now use this email to receive messages.",
+            "🟢 <b>Status:</b> Active\n\n"
+            "You can now receive emails here.",
 
         "generate":
             "➕ Generate New",
@@ -77,70 +83,85 @@ TEXT = {
         "refresh":
             "🔄 Refresh",
 
-        "generating":
-            "⏳ <b>Generating a new temporary email...</b>",
+        "checking":
+            "🔎 <b>Checking your inbox...</b>",
 
-        "inbox_loading":
-            "📥 <b>Loading your inbox...</b>",
-
-        "refreshing":
-            "🔄 <b>Refreshing your inbox...</b>",
-
-        "no_mail":
-            "📭 <b>No new messages.</b>\n\n"
-            "Your inbox is currently empty.",
-
-        "new_mail":
-            "📨 <b>New Message</b>\n\n"
-            "👤 <b>From:</b> {sender}\n"
-            "📌 <b>Subject:</b> {subject}\n"
-            "🕐 <b>Date:</b> {date}\n\n"
-            "{body}",
-
-        "read_more":
-            "📖 Read Full Message",
-
-        "copy_code":
-            "📋 Copy Code: {code}",
-
-        "code_found":
-            "🔐 <b>Verification Code:</b>\n\n"
-            "<code>{code}</code>",
+        "empty":
+            "📭 <b>Inbox is empty.</b>\n\n"
+            "No new messages received yet.",
 
         "no_mailbox":
             "⚠️ <b>No temporary email found.</b>\n\n"
-            "Please press <b>➕ Generate New</b> first.",
+            "Press <b>➕ Generate New</b> first.",
 
         "api_error":
             "❌ <b>Something went wrong.</b>\n\n"
-            "Please try again in a moment.",
+            "Please try again later.",
 
-        "language_select":
-            "🌐 <b>Please select your preferred language:</b>",
+        "new_mail":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "       📨 <b>NEW EMAIL</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "🌐 <b>Source:</b> {source}\n"
+            "👤 <b>From:</b> {sender}\n"
+            "📌 <b>Subject:</b> {subject}\n"
+            "🕐 <b>Date:</b> {date}\n\n"
+            "💬 <b>Message:</b>\n"
+            "{body}",
 
-        "admin_only":
-            "🔐 <b>ADMIN ONLY</b>\n\n"
-            "Sorry! This command is available only "
-            "for administrators.\n\n"
-            "You don't have permission to use this command.",
+        "code":
+            "🔐 <b>Verification Code</b>\n\n"
+            "<code>{code}</code>\n\n"
+            "Tap the code above to copy it.",
+
+        "refresh_done":
+            "🔄 <b>Inbox refreshed!</b>\n\n"
+            "📨 Messages found: <b>{count}</b>",
+
+        "language":
+            "🌐 <b>Select your preferred language:</b>",
 
         "help":
-            "📚 <b>Help</b>\n\n"
-            "➕ Generate New — Create a new temporary email\n"
-            "📥 Inbox — View received messages\n"
-            "🔄 Refresh — Check for new messages\n"
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "        📚 <b>HELP</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "➕ Generate New — Create a new email\n"
+            "📥 Inbox — View received emails\n"
+            "🔄 Refresh — Check new emails\n"
             "/language — Change language\n"
-            "/help — Show help",
+            "/help — Show help\n"
+            "/about — About the bot",
 
         "about":
-            "📧 <b>Temp Mail Bot</b>\n\n"
-            "Fast temporary email receiver.\n"
-            "Powered by Smails API.",
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "      📧 <b>TEMP MAIL</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "Fast disposable email receiver.\n\n"
+            "⚡ Powered by Smails API\n"
+            "🔒 No API key required",
 
-        "stats":
-            "📊 <b>Your Statistics</b>\n\n"
-            "User ID: <code>{user_id}</code>\n"
-            "Mailbox: {mailbox}"
+        "admin_only":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "      🔐 <b>ADMIN ONLY</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "Sorry! This command is available\n"
+            "only for administrators.\n\n"
+            "❌ You don't have permission.",
+
+        "broadcast_start":
+            "📢 <b>Broadcast Mode</b>\n\n"
+            "Send the message you want to broadcast.",
+
+        "broadcast_done":
+            "✅ <b>Broadcast completed!</b>\n\n"
+            "📤 Sent: <b>{sent}</b>\n"
+            "❌ Failed: <b>{failed}</b>",
+
+        "admin_panel":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "       👑 <b>ADMIN PANEL</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "🔐 You have administrator access.",
 
     },
 
@@ -151,14 +172,19 @@ TEXT = {
             "👋 <b>Temp Mail Bot-এ স্বাগতম!</b>\n\n"
             "আপনার পছন্দের ভাষা নির্বাচন করুন:",
 
-        "language_success":
+        "language_ok":
             "✅ <b>ভাষা সফলভাবে নির্বাচন করা হয়েছে!</b>",
 
-        "mail_created":
-            "🎉 <b>Temporary Email তৈরি হয়েছে!</b>\n\n"
-            "📧 <b>আপনার Email:</b>\n"
+        "generating":
+            "⚡ <b>আপনার Temporary Email তৈরি হচ্ছে...</b>",
+
+        "created":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "   📧 <b>নতুন TEMP EMAIL</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "📮 <b>Email:</b>\n"
             "<code>{email}</code>\n\n"
-            "⏳ <b>Status:</b> Active\n\n"
+            "🟢 <b>Status:</b> Active\n\n"
             "এখন এই Email-এ message গ্রহণ করতে পারবেন।",
 
         "generate":
@@ -170,89 +196,108 @@ TEXT = {
         "refresh":
             "🔄 রিফ্রেশ",
 
-        "generating":
-            "⏳ <b>নতুন Temporary Email তৈরি হচ্ছে...</b>",
+        "checking":
+            "🔎 <b>আপনার Inbox check করা হচ্ছে...</b>",
 
-        "inbox_loading":
-            "📥 <b>আপনার Inbox লোড হচ্ছে...</b>",
-
-        "refreshing":
-            "🔄 <b>আপনার Inbox রিফ্রেশ হচ্ছে...</b>",
-
-        "no_mail":
-            "📭 <b>কোনো নতুন Message নেই।</b>\n\n"
-            "আপনার Inbox বর্তমানে খালি।",
-
-        "new_mail":
-            "📨 <b>নতুন Message</b>\n\n"
-            "👤 <b>From:</b> {sender}\n"
-            "📌 <b>Subject:</b> {subject}\n"
-            "🕐 <b>Date:</b> {date}\n\n"
-            "{body}",
-
-        "read_more":
-            "📖 পুরো Message দেখুন",
-
-        "copy_code":
-            "📋 Code Copy করুন: {code}",
-
-        "code_found":
-            "🔐 <b>Verification Code:</b>\n\n"
-            "<code>{code}</code>",
+        "empty":
+            "📭 <b>Inbox খালি।</b>\n\n"
+            "এখনো কোনো নতুন Message আসেনি।",
 
         "no_mailbox":
             "⚠️ <b>কোনো Temporary Email পাওয়া যায়নি।</b>\n\n"
-            "প্রথমে <b>➕ নতুন তৈরি করুন</b> Button চাপুন।",
+            "প্রথমে <b>➕ নতুন তৈরি করুন</b> চাপুন।",
 
         "api_error":
             "❌ <b>সমস্যা হয়েছে।</b>\n\n"
             "কিছুক্ষণ পর আবার চেষ্টা করুন।",
 
-        "language_select":
+        "new_mail":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "       📨 <b>নতুন EMAIL</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "🌐 <b>Source:</b> {source}\n"
+            "👤 <b>From:</b> {sender}\n"
+            "📌 <b>Subject:</b> {subject}\n"
+            "🕐 <b>Date:</b> {date}\n\n"
+            "💬 <b>Message:</b>\n"
+            "{body}",
+
+        "code":
+            "🔐 <b>Verification Code</b>\n\n"
+            "<code>{code}</code>\n\n"
+            "উপরের Code-এ চাপ দিলে Copy করতে পারবেন।",
+
+        "refresh_done":
+            "🔄 <b>Inbox Refresh হয়েছে!</b>\n\n"
+            "📨 পাওয়া Message: <b>{count}</b>",
+
+        "language":
             "🌐 <b>আপনার পছন্দের ভাষা নির্বাচন করুন:</b>",
 
-        "admin_only":
-            "🔐 <b>শুধুমাত্র ADMIN</b>\n\n"
-            "দুঃখিত! এই Command শুধুমাত্র "
-            "Administrator-এর জন্য।\n\n"
-            "আপনার এই Command ব্যবহার করার অনুমতি নেই।",
-
         "help":
-            "📚 <b>Help</b>\n\n"
-            "➕ নতুন তৈরি করুন — নতুন Temporary Email\n"
-            "📥 ইনবক্স — আসা Message দেখুন\n"
-            "🔄 রিফ্রেশ — নতুন Message check করুন\n"
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "        📚 <b>HELP</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "➕ নতুন তৈরি করুন — নতুন Email\n"
+            "📥 ইনবক্স — আসা Email দেখুন\n"
+            "🔄 রিফ্রেশ — নতুন Email check করুন\n"
             "/language — ভাষা পরিবর্তন\n"
-            "/help — Help দেখুন",
+            "/help — Help দেখুন\n"
+            "/about — Bot সম্পর্কে",
 
         "about":
-            "📧 <b>Temp Mail Bot</b>\n\n"
-            "দ্রুত Temporary Email receiver।\n"
-            "Smails API দ্বারা পরিচালিত।",
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "      📧 <b>TEMP MAIL</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "দ্রুত Temporary Email receiver।\n\n"
+            "⚡ Smails API দ্বারা পরিচালিত\n"
+            "🔒 API key প্রয়োজন নেই",
 
-        "stats":
-            "📊 <b>আপনার Statistics</b>\n\n"
-            "User ID: <code>{user_id}</code>\n"
-            "Mailbox: {mailbox}"
+        "admin_only":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "      🔐 <b>ADMIN ONLY</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "দুঃখিত! এই Command শুধুমাত্র\n"
+            "Administrator-এর জন্য।\n\n"
+            "❌ আপনার অনুমতি নেই।",
+
+        "broadcast_start":
+            "📢 <b>Broadcast Mode</b>\n\n"
+            "যে Message সবাইকে পাঠাতে চান সেটি পাঠান।",
+
+        "broadcast_done":
+            "✅ <b>Broadcast সম্পন্ন!</b>\n\n"
+            "📤 পাঠানো হয়েছে: <b>{sent}</b>\n"
+            "❌ Failed: <b>{failed}</b>",
+
+        "admin_panel":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "       👑 <b>ADMIN PANEL</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "🔐 আপনার Administrator access আছে।",
 
     },
 
 
-    # Roman Hindi
     "hi": {
 
         "welcome":
             "👋 <b>Temp Mail Bot mein aapka swagat hai!</b>\n\n"
             "Apni pasand ki language select karein:",
 
-        "language_success":
+        "language_ok":
             "✅ <b>Language successfully select ho gayi!</b>",
 
-        "mail_created":
-            "🎉 <b>Temporary Email create ho gaya!</b>\n\n"
-            "📧 <b>Aapka Email:</b>\n"
+        "generating":
+            "⚡ <b>Aapka Temporary Email create ho raha hai...</b>",
+
+        "created":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "   📧 <b>NEW TEMP EMAIL</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "📮 <b>Email:</b>\n"
             "<code>{email}</code>\n\n"
-            "⏳ <b>Status:</b> Active\n\n"
+            "🟢 <b>Status:</b> Active\n\n"
             "Ab aap is Email par messages receive kar sakte hain.",
 
         "generate":
@@ -264,110 +309,120 @@ TEXT = {
         "refresh":
             "🔄 Refresh",
 
-        "generating":
-            "⏳ <b>Naya Temporary Email generate ho raha hai...</b>",
+        "checking":
+            "🔎 <b>Aapka Inbox check ho raha hai...</b>",
 
-        "inbox_loading":
-            "📥 <b>Aapka Inbox load ho raha hai...</b>",
-
-        "refreshing":
-            "🔄 <b>Aapka Inbox refresh ho raha hai...</b>",
-
-        "no_mail":
-            "📭 <b>Koi naya message nahi hai.</b>\n\n"
-            "Aapka inbox abhi empty hai.",
-
-        "new_mail":
-            "📨 <b>Naya Message</b>\n\n"
-            "👤 <b>From:</b> {sender}\n"
-            "📌 <b>Subject:</b> {subject}\n"
-            "🕐 <b>Date:</b> {date}\n\n"
-            "{body}",
-
-        "read_more":
-            "📖 Full Message Padhein",
-
-        "copy_code":
-            "📋 Code Copy Karein: {code}",
-
-        "code_found":
-            "🔐 <b>Verification Code:</b>\n\n"
-            "<code>{code}</code>",
+        "empty":
+            "📭 <b>Inbox empty hai.</b>\n\n"
+            "Abhi koi naya message nahi aaya.",
 
         "no_mailbox":
             "⚠️ <b>Koi Temporary Email nahi mila.</b>\n\n"
-            "Pehle <b>➕ Naya Generate</b> button press karein.",
+            "Pehle <b>➕ Naya Generate</b> press karein.",
 
         "api_error":
             "❌ <b>Kuch problem ho gayi.</b>\n\n"
             "Thodi der baad dobara try karein.",
 
-        "language_select":
+        "new_mail":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "       📨 <b>NEW EMAIL</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "🌐 <b>Source:</b> {source}\n"
+            "👤 <b>From:</b> {sender}\n"
+            "📌 <b>Subject:</b> {subject}\n"
+            "🕐 <b>Date:</b> {date}\n\n"
+            "💬 <b>Message:</b>\n"
+            "{body}",
+
+        "code":
+            "🔐 <b>Verification Code</b>\n\n"
+            "<code>{code}</code>\n\n"
+            "Upar diye gaye Code par tap karke copy karein.",
+
+        "refresh_done":
+            "🔄 <b>Inbox refresh ho gaya!</b>\n\n"
+            "📨 Messages mile: <b>{count}</b>",
+
+        "language":
             "🌐 <b>Apni pasand ki language select karein:</b>",
 
-        "admin_only":
-            "🔐 <b>ADMIN ONLY</b>\n\n"
-            "Maaf kijiye! Yeh command sirf "
-            "Administrator ke liye hai.\n\n"
-            "Aapko is command ko use karne ki permission nahi hai.",
-
         "help":
-            "📚 <b>Help</b>\n\n"
-            "➕ Naya Generate — Naya Temporary Email banayein\n"
-            "📥 Inbox — Received messages dekhein\n"
-            "🔄 Refresh — Naye messages check karein\n"
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "        📚 <b>HELP</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "➕ Naya Generate — Naya Email\n"
+            "📥 Inbox — Received emails dekhein\n"
+            "🔄 Refresh — Naye emails check karein\n"
             "/language — Language change karein\n"
-            "/help — Help dekhein",
+            "/help — Help dekhein\n"
+            "/about — Bot ke baare mein",
 
         "about":
-            "📧 <b>Temp Mail Bot</b>\n\n"
-            "Fast Temporary Email receiver.\n"
-            "Smails API se powered.",
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "      📧 <b>TEMP MAIL</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "Fast Temporary Email receiver.\n\n"
+            "⚡ Smails API se powered\n"
+            "🔒 API key ki zarurat nahi",
 
-        "stats":
-            "📊 <b>Aapke Statistics</b>\n\n"
-            "User ID: <code>{user_id}</code>\n"
-            "Mailbox: {mailbox}"
+        "admin_only":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "      🔐 <b>ADMIN ONLY</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "Maaf kijiye! Yeh command sirf\n"
+            "Administrator ke liye hai.\n\n"
+            "❌ Aapko permission nahi hai.",
+
+        "broadcast_start":
+            "📢 <b>Broadcast Mode</b>\n\n"
+            "Jo message sabhi users ko bhejna hai, woh bhejein.",
+
+        "broadcast_done":
+            "✅ <b>Broadcast complete ho gaya!</b>\n\n"
+            "📤 Sent: <b>{sent}</b>\n"
+            "❌ Failed: <b>{failed}</b>",
+
+        "admin_panel":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "       👑 <b>ADMIN PANEL</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "🔐 Aapke paas Administrator access hai.",
 
     }
-
 }
 
 
 # =========================================================
-# LANGUAGE KEYBOARD
+# LANGUAGE BUTTONS
 # =========================================================
 
 def language_keyboard():
 
     return InlineKeyboardMarkup([
-
         [
             InlineKeyboardButton(
                 "🇺🇸 English",
                 callback_data="lang_en"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "🇧🇩 বাংলা",
                 callback_data="lang_bn"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "🇮🇳 Hindi",
                 callback_data="lang_hi"
             )
         ]
-
     ])
 
 
 # =========================================================
-# MAIN KEYBOARD
+# MAIN BUTTONS
 # =========================================================
 
 def main_keyboard(lang):
@@ -375,31 +430,27 @@ def main_keyboard(lang):
     t = TEXT[lang]
 
     return InlineKeyboardMarkup([
-
         [
             InlineKeyboardButton(
                 t["generate"],
                 callback_data="generate"
             ),
-
             InlineKeyboardButton(
                 t["inbox"],
                 callback_data="inbox"
             )
         ],
-
         [
             InlineKeyboardButton(
                 t["refresh"],
                 callback_data="refresh"
             )
         ]
-
     ])
 
 
 # =========================================================
-# HTTP SESSION
+# API REQUEST
 # =========================================================
 
 async def api_request(
@@ -408,7 +459,7 @@ async def api_request(
     token=None
 ):
 
-    url = SMAILS_API + endpoint
+    url = API_BASE + endpoint
 
     headers = {}
 
@@ -421,20 +472,37 @@ async def api_request(
         total=8
     )
 
-    async with aiohttp.ClientSession(
-        timeout=timeout
-    ) as session:
+    try:
 
-        async with session.request(
-            method,
-            url,
-            headers=headers
-        ) as response:
+        async with aiohttp.ClientSession(
+            timeout=timeout
+        ) as session:
 
-            if response.status >= 400:
-                return None
+            async with session.request(
+                method,
+                url,
+                headers=headers
+            ) as response:
 
-            return await response.json()
+                if response.status >= 400:
+
+                    logger.error(
+                        "Smails API error: %s",
+                        response.status
+                    )
+
+                    return None
+
+                return await response.json()
+
+    except Exception as error:
+
+        logger.error(
+            "API error: %s",
+            error
+        )
+
+        return None
 
 
 # =========================================================
@@ -463,23 +531,7 @@ async def get_messages(token):
 
 
 # =========================================================
-# GET ONE MESSAGE
-# =========================================================
-
-async def get_message(
-    token,
-    message_id
-):
-
-    return await api_request(
-        "GET",
-        f"/mailbox/messages/{message_id}",
-        token
-    )
-
-
-# =========================================================
-# EXTRACT CODE
+# EXTRACT VERIFICATION CODE
 # =========================================================
 
 def extract_code(text):
@@ -488,23 +540,54 @@ def extract_code(text):
         return None
 
     patterns = [
-
         r"\b\d{6}\b",
-        r"\b\d{4,8}\b",
-
+        r"\b\d{5}\b",
+        r"\b\d{4}\b",
+        r"\b[A-Z0-9]{6,8}\b",
     ]
 
     for pattern in patterns:
 
         match = re.search(
             pattern,
-            text
+            text,
+            re.IGNORECASE
         )
 
         if match:
             return match.group(0)
 
     return None
+
+
+# =========================================================
+# SAFE TEXT
+# =========================================================
+
+def safe(value):
+
+    if value is None:
+        return ""
+
+    return html.escape(
+        str(value)
+    )
+
+
+# =========================================================
+# GET LANGUAGE
+# =========================================================
+
+def user_lang(user_id):
+
+    lang = get_language(
+        user_id
+    )
+
+    if lang not in TEXT:
+        return "en"
+
+    return lang
 
 
 # =========================================================
@@ -518,15 +601,13 @@ async def start(
 
     user = update.effective_user
 
-    user_id = user.id
-
     save_user(
-        user_id,
+        user.id,
         user.username
     )
 
     lang = get_language(
-        user_id
+        user.id
     )
 
     if not lang:
@@ -539,18 +620,18 @@ async def start(
 
         return
 
-    await generate_email(
+    await generate_new(
         update,
-        user_id,
+        user.id,
         lang
     )
 
 
 # =========================================================
-# GENERATE EMAIL
+# GENERATE NEW
 # =========================================================
 
-async def generate_email(
+async def generate_new(
     update,
     user_id,
     lang
@@ -558,83 +639,66 @@ async def generate_email(
 
     t = TEXT[lang]
 
-    if update.callback_query:
-
-        message = (
-            update.callback_query.message
-        )
-
-    else:
-
-        message = update.message
-
+    message = (
+        update.callback_query.message
+        if update.callback_query
+        else update.message
+    )
 
     loading = await message.reply_text(
         t["generating"],
         parse_mode="HTML"
     )
 
-    try:
+    mailbox = await create_mailbox()
 
-        mailbox = await create_mailbox()
-
-        if not mailbox:
-
-            await loading.edit_text(
-                t["api_error"],
-                parse_mode="HTML"
-            )
-
-            return
-
-
-        email = mailbox.get(
-            "address"
-        )
-
-        token = mailbox.get(
-            "token"
-        )
-
-
-        save_mailbox(
-            user_id,
-            email,
-            token
-        )
-
-
-        await loading.edit_text(
-            t["mail_created"].format(
-                email=html.escape(
-                    email
-                )
-            ),
-            reply_markup=main_keyboard(
-                lang
-            ),
-            parse_mode="HTML"
-        )
-
-    except Exception as e:
-
-        logger.error(
-            "Generate error: %s",
-            e
-        )
+    if not mailbox:
 
         await loading.edit_text(
             t["api_error"],
             parse_mode="HTML"
         )
 
+        return
+
+    email = mailbox.get(
+        "address"
+    )
+
+    token = mailbox.get(
+        "token"
+    )
+
+    if not email or not token:
+
+        await loading.edit_text(
+            t["api_error"],
+            parse_mode="HTML"
+        )
+
+        return
+
+    save_mailbox(
+        user_id,
+        email,
+        token
+    )
+
+    await loading.edit_text(
+        t["created"].format(
+            email=safe(email)
+        ),
+        reply_markup=main_keyboard(lang),
+        parse_mode="HTML"
+    )
+
 
 # =========================================================
-# INBOX
+# SHOW INBOX
 # =========================================================
 
 async def show_inbox(
-    update,
+    message,
     user_id,
     lang
 ):
@@ -647,7 +711,7 @@ async def show_inbox(
 
     if not mailbox:
 
-        await update.message.reply_text(
+        await message.reply_text(
             t["no_mailbox"],
             reply_markup=main_keyboard(lang),
             parse_mode="HTML"
@@ -655,160 +719,136 @@ async def show_inbox(
 
         return
 
-
-    token = mailbox["token"]
-
-    loading = await update.message.reply_text(
-        t["inbox_loading"],
+    loading = await message.reply_text(
+        t["checking"],
         parse_mode="HTML"
     )
 
-    try:
+    data = await get_messages(
+        mailbox["token"]
+    )
 
-        data = await get_messages(
-            token
-        )
-
-        if not data:
-
-            await loading.edit_text(
-                t["api_error"],
-                parse_mode="HTML"
-            )
-
-            return
-
-
-        messages = data.get(
-            "messages",
-            []
-        )
-
-
-        if not messages:
-
-            await loading.edit_text(
-                t["no_mail"],
-                reply_markup=main_keyboard(lang),
-                parse_mode="HTML"
-            )
-
-            return
-
-
-        await loading.delete()
-
-
-        # Show latest 10 messages
-
-        for msg in messages[:10]:
-
-            sender = (
-                msg.get("from")
-                or "Unknown"
-            )
-
-            if isinstance(
-                sender,
-                dict
-            ):
-
-                sender = (
-                    sender.get("address")
-                    or sender.get("name")
-                    or "Unknown"
-                )
-
-
-            subject = (
-                msg.get("subject")
-                or "(No Subject)"
-            )
-
-            date = (
-                msg.get("createdAt")
-                or ""
-            )
-
-
-            body_preview = (
-                msg.get("intro")
-                or ""
-            )
-
-
-            code = extract_code(
-                body_preview
-            )
-
-
-            text = t["new_mail"].format(
-
-                sender=html.escape(
-                    str(sender)
-                ),
-
-                subject=html.escape(
-                    str(subject)
-                ),
-
-                date=html.escape(
-                    str(date)
-                ),
-
-                body=html.escape(
-                    str(body_preview)[:500]
-                )
-            )
-
-
-            buttons = []
-
-
-            if code:
-
-                buttons.append([
-
-                    InlineKeyboardButton(
-                        t["copy_code"].format(
-                            code=code
-                        ),
-                        callback_data=(
-                            f"code_{code}"
-                        )
-                    )
-
-                ])
-
-
-            await update.message.reply_text(
-                text,
-                reply_markup=(
-                    InlineKeyboardMarkup(
-                        buttons
-                    )
-                    if buttons
-                    else None
-                ),
-                parse_mode="HTML"
-            )
-
-
-    except Exception as e:
-
-        logger.error(
-            "Inbox error: %s",
-            e
-        )
+    if not data:
 
         await loading.edit_text(
             t["api_error"],
             parse_mode="HTML"
         )
 
+        return
+
+    messages = data.get(
+        "messages",
+        []
+    )
+
+    if not messages:
+
+        await loading.edit_text(
+            t["empty"],
+            reply_markup=main_keyboard(lang),
+            parse_mode="HTML"
+        )
+
+        return
+
+    await loading.delete()
+
+    for item in messages[:10]:
+
+        sender_data = item.get(
+            "from",
+            {}
+        )
+
+        if isinstance(
+            sender_data,
+            dict
+        ):
+
+            sender = (
+                sender_data.get("address")
+                or sender_data.get("name")
+                or "Unknown"
+            )
+
+        else:
+
+            sender = str(
+                sender_data
+            )
+
+        subject = (
+            item.get("subject")
+            or "(No Subject)"
+        )
+
+        date = (
+            item.get("createdAt")
+            or ""
+        )
+
+        body = (
+            item.get("intro")
+            or item.get("text")
+            or ""
+        )
+
+        code = extract_code(
+            body
+        )
+
+        message_text = t[
+            "new_mail"
+        ].format(
+
+            source="Email",
+
+            sender=safe(
+                sender
+            ),
+
+            subject=safe(
+                subject
+            ),
+
+            date=safe(
+                date
+            ),
+
+            body=safe(
+                body[:700]
+            )
+        )
+
+        buttons = []
+
+        if code:
+
+            buttons.append([
+                InlineKeyboardButton(
+                    f"📋 {code}",
+                    callback_data=(
+                        f"showcode:{code}"
+                    )
+                )
+            ])
+
+        await message.reply_text(
+            message_text,
+            reply_markup=(
+                InlineKeyboardMarkup(
+                    buttons
+                )
+                if buttons
+                else None
+            ),
+            parse_mode="HTML"
+        )
+
 
 # =========================================================
-# COMMAND: INBOX
+# INBOX COMMAND
 # =========================================================
 
 async def inbox_command(
@@ -820,27 +860,33 @@ async def inbox_command(
         update.effective_user.id
     )
 
-    lang = (
-        get_language(user_id)
-        or "en"
+    lang = user_lang(
+        user_id
     )
 
     await show_inbox(
-        update,
+        update.message,
         user_id,
         lang
     )
 
 
 # =========================================================
-# REFRESH
+# REFRESH COMMAND
 # =========================================================
 
-async def refresh_inbox(
+async def refresh_command(
     update,
-    user_id,
-    lang
+    context
 ):
+
+    user_id = (
+        update.effective_user.id
+    )
+
+    lang = user_lang(
+        user_id
+    )
 
     t = TEXT[lang]
 
@@ -858,65 +904,31 @@ async def refresh_inbox(
 
         return
 
-
-    loading = await update.message.reply_text(
-        t["refreshing"],
-        parse_mode="HTML"
+    data = await get_messages(
+        mailbox["token"]
     )
 
+    if not data:
 
-    try:
-
-        data = await get_messages(
-            mailbox["token"]
-        )
-
-        if not data:
-
-            await loading.edit_text(
-                t["api_error"],
-                parse_mode="HTML"
-            )
-
-            return
-
-
-        messages = data.get(
-            "messages",
-            []
-        )
-
-
-        if not messages:
-
-            await loading.edit_text(
-                t["no_mail"],
-                reply_markup=main_keyboard(lang),
-                parse_mode="HTML"
-            )
-
-            return
-
-
-        await loading.edit_text(
-            f"📨 <b>{len(messages)}</b> "
-            f"message(s) found.",
-            reply_markup=main_keyboard(lang),
-            parse_mode="HTML"
-        )
-
-
-    except Exception as e:
-
-        logger.error(
-            "Refresh error: %s",
-            e
-        )
-
-        await loading.edit_text(
+        await update.message.reply_text(
             t["api_error"],
             parse_mode="HTML"
         )
+
+        return
+
+    messages = data.get(
+        "messages",
+        []
+    )
+
+    await update.message.reply_text(
+        t["refresh_done"].format(
+            count=len(messages)
+        ),
+        reply_markup=main_keyboard(lang),
+        parse_mode="HTML"
+    )
 
 
 # =========================================================
@@ -932,13 +944,12 @@ async def language_command(
         update.effective_user.id
     )
 
-    lang = (
-        get_language(user_id)
-        or "en"
+    lang = user_lang(
+        user_id
     )
 
     await update.message.reply_text(
-        TEXT[lang]["language_select"],
+        TEXT[lang]["language"],
         reply_markup=language_keyboard(),
         parse_mode="HTML"
     )
@@ -957,9 +968,8 @@ async def help_command(
         update.effective_user.id
     )
 
-    lang = (
-        get_language(user_id)
-        or "en"
+    lang = user_lang(
+        user_id
     )
 
     await update.message.reply_text(
@@ -982,52 +992,12 @@ async def about_command(
         update.effective_user.id
     )
 
-    lang = (
-        get_language(user_id)
-        or "en"
+    lang = user_lang(
+        user_id
     )
 
     await update.message.reply_text(
         TEXT[lang]["about"],
-        parse_mode="HTML"
-    )
-
-
-# =========================================================
-# STATS
-# =========================================================
-
-async def stats_command(
-    update,
-    context
-):
-
-    user_id = (
-        update.effective_user.id
-    )
-
-    lang = (
-        get_language(user_id)
-        or "en"
-    )
-
-    mailbox = get_mailbox(
-        user_id
-    )
-
-    mailbox_text = (
-        mailbox["email"]
-        if mailbox
-        else "None"
-    )
-
-    await update.message.reply_text(
-        TEXT[lang]["stats"].format(
-            user_id=user_id,
-            mailbox=html.escape(
-                mailbox_text
-            )
-        ),
         parse_mode="HTML"
     )
 
@@ -1042,7 +1012,29 @@ def is_admin(user_id):
 
 
 # =========================================================
-# ADMIN-ONLY COMMAND EXAMPLE
+# ADMIN-ONLY MESSAGE
+# =========================================================
+
+async def admin_only(
+    update
+):
+
+    user_id = (
+        update.effective_user.id
+    )
+
+    lang = user_lang(
+        user_id
+    )
+
+    await update.message.reply_text(
+        TEXT[lang]["admin_only"],
+        parse_mode="HTML"
+    )
+
+
+# =========================================================
+# ADMIN COMMAND
 # =========================================================
 
 async def admin_command(
@@ -1050,33 +1042,101 @@ async def admin_command(
     context
 ):
 
-    user_id = (
+    if not is_admin(
         update.effective_user.id
-    )
+    ):
 
-    lang = (
-        get_language(user_id)
-        or "en"
-    )
-
-    if not is_admin(user_id):
-
-        await update.message.reply_text(
-            TEXT[lang]["admin_only"],
-            parse_mode="HTML"
-        )
+        await admin_only(update)
 
         return
 
+    lang = user_lang(
+        update.effective_user.id
+    )
+
     await update.message.reply_text(
-        "🔐 <b>Admin Panel</b>\n\n"
-        "Admin command accepted.",
+        TEXT[lang]["admin_panel"],
         parse_mode="HTML"
     )
 
 
 # =========================================================
-# CALLBACK HANDLER
+# BROADCAST
+# =========================================================
+
+async def broadcast_command(
+    update,
+    context
+):
+
+    if not is_admin(
+        update.effective_user.id
+    ):
+
+        await admin_only(update)
+
+        return
+
+    lang = user_lang(
+        update.effective_user.id
+    )
+
+    if not context.args:
+
+        await update.message.reply_text(
+            TEXT[lang]["broadcast_start"],
+            parse_mode="HTML"
+        )
+
+        return
+
+    broadcast_text = " ".join(
+        context.args
+    )
+
+    users = get_all_users()
+
+    sent = 0
+    failed = 0
+
+    for user_id in users:
+
+        try:
+
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=broadcast_text,
+                parse_mode="HTML"
+            )
+
+            sent += 1
+
+            # Prevent Telegram flood
+            await asyncio.sleep(
+                0.05
+            )
+
+        except Exception as error:
+
+            logger.warning(
+                "Broadcast failed %s: %s",
+                user_id,
+                error
+            )
+
+            failed += 1
+
+    await update.message.reply_text(
+        TEXT[lang]["broadcast_done"].format(
+            sent=sent,
+            failed=failed
+        ),
+        parse_mode="HTML"
+    )
+
+
+# =========================================================
+# CALLBACK
 # =========================================================
 
 async def callback_handler(
@@ -1084,15 +1144,11 @@ async def callback_handler(
     context
 ):
 
-    query = (
-        update.callback_query
-    )
+    query = update.callback_query
 
     await query.answer()
 
-    user_id = (
-        query.from_user.id
-    )
+    user_id = query.from_user.id
 
     data = query.data
 
@@ -1101,7 +1157,9 @@ async def callback_handler(
     # LANGUAGE
     # -----------------------------------------------------
 
-    if data.startswith("lang_"):
+    if data.startswith(
+        "lang_"
+    ):
 
         lang = data.replace(
             "lang_",
@@ -1109,7 +1167,6 @@ async def callback_handler(
         )
 
         if lang not in TEXT:
-
             lang = "en"
 
         set_language(
@@ -1118,13 +1175,12 @@ async def callback_handler(
         )
 
         await query.edit_message_text(
-            TEXT[lang]["language_success"],
+            TEXT[lang]["language_ok"],
             parse_mode="HTML"
         )
 
-        # Automatically create email
-
-        await generate_email(
+        # Automatically create first email
+        await generate_new(
             update,
             user_id,
             lang
@@ -1139,12 +1195,11 @@ async def callback_handler(
 
     if data == "generate":
 
-        lang = (
-            get_language(user_id)
-            or "en"
+        lang = user_lang(
+            user_id
         )
 
-        await generate_email(
+        await generate_new(
             update,
             user_id,
             lang
@@ -1159,156 +1214,15 @@ async def callback_handler(
 
     if data == "inbox":
 
-        lang = (
-            get_language(user_id)
-            or "en"
-        )
-
-        mailbox = get_mailbox(
+        lang = user_lang(
             user_id
         )
 
-        if not mailbox:
-
-            await query.message.reply_text(
-                TEXT[lang]["no_mailbox"],
-                reply_markup=main_keyboard(
-                    lang
-                ),
-                parse_mode="HTML"
-            )
-
-            return
-
-
-        data_result = await get_messages(
-            mailbox["token"]
+        await show_inbox(
+            query.message,
+            user_id,
+            lang
         )
-
-
-        if not data_result:
-
-            await query.message.reply_text(
-                TEXT[lang]["api_error"],
-                parse_mode="HTML"
-            )
-
-            return
-
-
-        messages = data_result.get(
-            "messages",
-            []
-        )
-
-
-        if not messages:
-
-            await query.message.reply_text(
-                TEXT[lang]["no_mail"],
-                reply_markup=main_keyboard(
-                    lang
-                ),
-                parse_mode="HTML"
-            )
-
-            return
-
-
-        for msg in messages[:10]:
-
-            sender = (
-                msg.get("from")
-                or "Unknown"
-            )
-
-            if isinstance(
-                sender,
-                dict
-            ):
-
-                sender = (
-                    sender.get("address")
-                    or sender.get("name")
-                    or "Unknown"
-                )
-
-
-            subject = (
-                msg.get("subject")
-                or "(No Subject)"
-            )
-
-            intro = (
-                msg.get("intro")
-                or ""
-            )
-
-            date = (
-                msg.get("createdAt")
-                or ""
-            )
-
-
-            code = extract_code(
-                intro
-            )
-
-
-            text = TEXT[lang][
-                "new_mail"
-            ].format(
-
-                sender=html.escape(
-                    str(sender)
-                ),
-
-                subject=html.escape(
-                    str(subject)
-                ),
-
-                date=html.escape(
-                    str(date)
-                ),
-
-                body=html.escape(
-                    str(intro)[:500]
-                )
-            )
-
-
-            buttons = []
-
-
-            if code:
-
-                buttons.append([
-
-                    InlineKeyboardButton(
-                        TEXT[lang][
-                            "copy_code"
-                        ].format(
-                            code=code
-                        ),
-                        callback_data=(
-                            f"code_{code}"
-                        )
-                    )
-
-                ])
-
-
-            await query.message.reply_text(
-                text,
-                reply_markup=(
-                    InlineKeyboardMarkup(
-                        buttons
-                    )
-                    if buttons
-                    else None
-                ),
-                parse_mode="HTML"
-            )
 
         return
 
@@ -1319,9 +1233,8 @@ async def callback_handler(
 
     if data == "refresh":
 
-        lang = (
-            get_language(user_id)
-            or "en"
+        lang = user_lang(
+            user_id
         )
 
         mailbox = get_mailbox(
@@ -1332,19 +1245,15 @@ async def callback_handler(
 
             await query.message.reply_text(
                 TEXT[lang]["no_mailbox"],
-                reply_markup=main_keyboard(
-                    lang
-                ),
+                reply_markup=main_keyboard(lang),
                 parse_mode="HTML"
             )
 
             return
 
-
         data_result = await get_messages(
             mailbox["token"]
         )
-
 
         if not data_result:
 
@@ -1355,23 +1264,16 @@ async def callback_handler(
 
             return
 
-
         messages = data_result.get(
             "messages",
             []
         )
 
-
         await query.message.reply_text(
-
-            f"🔄 <b>Refresh Complete</b>\n\n"
-            f"📨 Messages found: "
-            f"<b>{len(messages)}</b>",
-
-            reply_markup=main_keyboard(
-                lang
+            TEXT[lang]["refresh_done"].format(
+                count=len(messages)
             ),
-
+            reply_markup=main_keyboard(lang),
             parse_mode="HTML"
         )
 
@@ -1379,30 +1281,45 @@ async def callback_handler(
 
 
     # -----------------------------------------------------
-    # COPY CODE
+    # SHOW CODE
     # -----------------------------------------------------
 
-    if data.startswith("code_"):
+    if data.startswith(
+        "showcode:"
+    ):
 
-        code = data.replace(
-            "code_",
-            "",
+        code = data.split(
+            ":",
             1
-        )
+        )[1]
 
-        lang = (
-            get_language(user_id)
-            or "en"
+        lang = user_lang(
+            user_id
         )
 
         await query.answer(
-            TEXT[lang]["code_found"].format(
+            TEXT[lang]["code"].format(
                 code=code
             ),
             show_alert=True
         )
 
         return
+
+
+# =========================================================
+# ERROR HANDLER
+# =========================================================
+
+async def error_handler(
+    update,
+    context
+):
+
+    logger.error(
+        "Unhandled error:",
+        exc_info=context.error
+    )
 
 
 # =========================================================
@@ -1420,9 +1337,7 @@ def main():
     )
 
 
-    # -------------------------
-    # Commands
-    # -------------------------
+    # User commands
 
     application.add_handler(
         CommandHandler(
@@ -1441,13 +1356,7 @@ def main():
     application.add_handler(
         CommandHandler(
             "refresh",
-            lambda u, c: refresh_inbox(
-                u,
-                u.effective_user.id,
-                get_language(
-                    u.effective_user.id
-                ) or "en"
-            )
+            refresh_command
         )
     )
 
@@ -1472,15 +1381,9 @@ def main():
         )
     )
 
-    application.add_handler(
-        CommandHandler(
-            "stats",
-            stats_command
-        )
-    )
 
+    # Admin
 
-    # Admin command
     application.add_handler(
         CommandHandler(
             "admin",
@@ -1488,15 +1391,33 @@ def main():
         )
     )
 
+    # Supports both spellings
+    application.add_handler(
+        CommandHandler(
+            "broadcast",
+            broadcast_command
+        )
+    )
 
-    # -------------------------
-    # Inline Buttons
-    # -------------------------
+    application.add_handler(
+        CommandHandler(
+            "boardchat",
+            broadcast_command
+        )
+    )
+
+
+    # Inline buttons
 
     application.add_handler(
         CallbackQueryHandler(
             callback_handler
         )
+    )
+
+
+    application.add_error_handler(
+        error_handler
     )
 
 
@@ -1511,7 +1432,7 @@ def main():
 
 
 # =========================================================
-# RUN
+# START BOT
 # =========================================================
 
 if __name__ == "__main__":
