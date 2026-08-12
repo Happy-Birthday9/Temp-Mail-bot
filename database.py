@@ -12,8 +12,7 @@ from threading import Lock
 # SETTINGS
 # ============================================================
 
-BASE_DIR = Path(__file__).resolve().parent
-DB_FILE = BASE_DIR / "temp_mail.db"
+DB_FILE = Path("temp_mail.db")
 
 DB_LOCK = Lock()
 
@@ -23,9 +22,6 @@ DB_LOCK = Lock()
 # ============================================================
 
 def get_connection():
-    """
-    Create a new SQLite connection.
-    """
     conn = sqlite3.connect(
         DB_FILE,
         timeout=30,
@@ -38,13 +34,10 @@ def get_connection():
 
 
 # ============================================================
-# DATABASE INITIALIZE
+# INITIALIZE DATABASE
 # ============================================================
 
 def init_db():
-    """
-    Create required database tables.
-    """
 
     with DB_LOCK:
 
@@ -62,14 +55,14 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
                     username TEXT,
-                    language TEXT,
+                    language TEXT DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
             # ------------------------------------------------
-            # MAILBOXES TABLE
+            # MAILBOX TABLE
             # ------------------------------------------------
 
             cursor.execute("""
@@ -84,22 +77,6 @@ def init_db():
                     REFERENCES users(user_id)
                     ON DELETE CASCADE
                 )
-            """)
-
-            # ------------------------------------------------
-            # INDEXES
-            # ------------------------------------------------
-
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS
-                idx_users_language
-                ON users(language)
-            """)
-
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS
-                idx_mailboxes_token
-                ON mailboxes(token)
             """)
 
             conn.commit()
@@ -117,12 +94,6 @@ def save_user(
     user_id,
     username=None
 ):
-    """
-    Save a Telegram user.
-
-    Existing user হলে username update করবে।
-    New user হলে language NULL থাকবে।
-    """
 
     with DB_LOCK:
 
@@ -160,15 +131,6 @@ def save_user(
 # ============================================================
 
 def get_language(user_id):
-    """
-    Return user's selected language.
-
-    Return:
-        'en'
-        'bn'
-        'hi'
-        None
-    """
 
     with DB_LOCK:
 
@@ -206,18 +168,6 @@ def set_language(
     user_id,
     language
 ):
-    """
-    Save user's selected language.
-    """
-
-    allowed_languages = {
-        "en",
-        "bn",
-        "hi"
-    }
-
-    if language not in allowed_languages:
-        language = "en"
 
     with DB_LOCK:
 
@@ -227,7 +177,7 @@ def set_language(
 
             cursor = conn.cursor()
 
-            # User না থাকলে আগে create
+            # User না থাকলে আগে তৈরি করবে
             cursor.execute("""
                 INSERT INTO users (
                     user_id,
@@ -260,21 +210,6 @@ def save_mailbox(
     email,
     token
 ):
-    """
-    Save or update temporary mailbox.
-
-    One user = one active mailbox.
-    """
-
-    if not email:
-        raise ValueError(
-            "Email cannot be empty."
-        )
-
-    if not token:
-        raise ValueError(
-            "Mailbox token cannot be empty."
-        )
 
     with DB_LOCK:
 
@@ -284,7 +219,7 @@ def save_mailbox(
 
             cursor = conn.cursor()
 
-            # Ensure user exists
+            # User না থাকলে তৈরি
             cursor.execute("""
                 INSERT INTO users (
                     user_id
@@ -297,7 +232,7 @@ def save_mailbox(
                 int(user_id),
             ))
 
-            # Save mailbox
+            # Mailbox save/update
             cursor.execute("""
                 INSERT INTO mailboxes (
                     user_id,
@@ -329,21 +264,6 @@ def save_mailbox(
 # ============================================================
 
 def get_mailbox(user_id):
-    """
-    Return user's mailbox.
-
-    Example:
-    {
-        "user_id": 123456,
-        "email": "example@mail.com",
-        "token": "xxxxx",
-        "created_at": "...",
-        "updated_at": "..."
-    }
-
-    If no mailbox:
-        return None
-    """
 
     with DB_LOCK:
 
@@ -371,7 +291,13 @@ def get_mailbox(user_id):
             if not row:
                 return None
 
-            return dict(row)
+            return {
+                "user_id": row["user_id"],
+                "email": row["email"],
+                "token": row["token"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
 
         finally:
 
@@ -383,9 +309,6 @@ def get_mailbox(user_id):
 # ============================================================
 
 def delete_mailbox(user_id):
-    """
-    Delete user's current mailbox.
-    """
 
     with DB_LOCK:
 
@@ -414,14 +337,6 @@ def delete_mailbox(user_id):
 # ============================================================
 
 def get_all_users():
-    """
-    Return all Telegram user IDs.
-
-    Used by:
-        - auto inbox
-        - statistics
-        - broadcast
-    """
 
     with DB_LOCK:
 
@@ -434,7 +349,7 @@ def get_all_users():
             cursor.execute("""
                 SELECT user_id
                 FROM users
-                ORDER BY user_id
+                ORDER BY user_id ASC
             """)
 
             rows = cursor.fetchall()
@@ -454,11 +369,6 @@ def get_all_users():
 # ============================================================
 
 def get_all_mailboxes():
-    """
-    Return all active mailboxes.
-
-    Useful for admin/statistics.
-    """
 
     with DB_LOCK:
 
@@ -476,13 +386,19 @@ def get_all_mailboxes():
                     created_at,
                     updated_at
                 FROM mailboxes
-                ORDER BY user_id
+                ORDER BY user_id ASC
             """)
 
             rows = cursor.fetchall()
 
             return [
-                dict(row)
+                {
+                    "user_id": row["user_id"],
+                    "email": row["email"],
+                    "token": row["token"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
                 for row in rows
             ]
 
@@ -492,13 +408,10 @@ def get_all_mailboxes():
 
 
 # ============================================================
-# COUNT USERS
+# USER COUNT
 # ============================================================
 
-def count_users():
-    """
-    Return total registered users.
-    """
+def get_user_count():
 
     with DB_LOCK:
 
@@ -509,11 +422,13 @@ def count_users():
             cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT COUNT(*)
+                SELECT COUNT(*) AS total
                 FROM users
             """)
 
-            return cursor.fetchone()[0]
+            row = cursor.fetchone()
+
+            return int(row["total"])
 
         finally:
 
@@ -521,13 +436,10 @@ def count_users():
 
 
 # ============================================================
-# COUNT MAILBOXES
+# MAILBOX COUNT
 # ============================================================
 
-def count_mailboxes():
-    """
-    Return total active mailboxes.
-    """
+def get_mailbox_count():
 
     with DB_LOCK:
 
@@ -538,11 +450,13 @@ def count_mailboxes():
             cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT COUNT(*)
+                SELECT COUNT(*) AS total
                 FROM mailboxes
             """)
 
-            return cursor.fetchone()[0]
+            row = cursor.fetchone()
+
+            return int(row["total"])
 
         finally:
 
@@ -550,13 +464,10 @@ def count_mailboxes():
 
 
 # ============================================================
-# USER EXISTS
+# CHECK USER EXISTS
 # ============================================================
 
 def user_exists(user_id):
-    """
-    Check whether user exists.
-    """
 
     with DB_LOCK:
 
@@ -583,13 +494,10 @@ def user_exists(user_id):
 
 
 # ============================================================
-# MAILBOX EXISTS
+# CHECK MAILBOX EXISTS
 # ============================================================
 
 def mailbox_exists(user_id):
-    """
-    Check whether user has an active mailbox.
-    """
 
     with DB_LOCK:
 
@@ -616,86 +524,12 @@ def mailbox_exists(user_id):
 
 
 # ============================================================
-# GET USERS BY LANGUAGE
-# ============================================================
-
-def get_users_by_language(language):
-    """
-    Return users who selected a specific language.
-    """
-
-    allowed_languages = {
-        "en",
-        "bn",
-        "hi"
-    }
-
-    if language not in allowed_languages:
-        return []
-
-    with DB_LOCK:
-
-        conn = get_connection()
-
-        try:
-
-            cursor = conn.cursor()
-
-            cursor.execute("""
-                SELECT user_id
-                FROM users
-                WHERE language = ?
-                ORDER BY user_id
-            """, (
-                language,
-            ))
-
-            rows = cursor.fetchall()
-
-            return [
-                int(row["user_id"])
-                for row in rows
-            ]
-
-        finally:
-
-            conn.close()
-
-
-# ============================================================
-# CLOSE / CLEANUP
+# CLOSE / NO-OP
 # ============================================================
 
 def close_db():
     """
-    SQLite connections are opened per operation,
-    so there is no persistent connection to close.
-
-    This function is kept for compatibility.
+    SQLite connection প্রতি function-এ close করা হচ্ছে,
+    তাই আলাদা persistent connection close করার প্রয়োজন নেই।
     """
     pass
-
-
-# ============================================================
-# AUTO INITIALIZE
-# ============================================================
-
-if __name__ == "__main__":
-
-    init_db()
-
-    print(
-        "✅ Database initialized successfully."
-    )
-
-    print(
-        f"📁 Database file: {DB_FILE}"
-    )
-
-    print(
-        f"👥 Users: {count_users()}"
-    )
-
-    print(
-        f"📧 Mailboxes: {count_mailboxes()}"
-    )
