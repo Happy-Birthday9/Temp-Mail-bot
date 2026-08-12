@@ -1,15 +1,27 @@
 # database.py
 
 import sqlite3
+import threading
 from pathlib import Path
 
 
-DB_FILE = Path("bot.db")
+# =========================================================
+# DATABASE SETTINGS
+# =========================================================
 
+DB_FILE = Path(__file__).with_name("bot.db")
+
+_db_lock = threading.Lock()
+
+
+# =========================================================
+# DATABASE CONNECTION
+# =========================================================
 
 def get_connection():
     conn = sqlite3.connect(
         DB_FILE,
+        timeout=30,
         check_same_thread=False
     )
 
@@ -18,116 +30,174 @@ def get_connection():
     return conn
 
 
+# =========================================================
+# INIT DATABASE
+# =========================================================
+
 def init_db():
 
-    conn = get_connection()
+    with _db_lock:
 
-    cursor = conn.cursor()
+        conn = get_connection()
 
-    # Users
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            language TEXT DEFAULT 'en',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        try:
 
-    # Temporary mailboxes
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS mailboxes (
-            user_id INTEGER PRIMARY KEY,
-            email TEXT NOT NULL,
-            token TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(user_id)
-                REFERENCES users(user_id)
-                ON DELETE CASCADE
-        )
-    """)
+            cursor = conn.cursor()
 
-    conn.commit()
-    conn.close()
+            # -----------------------------
+            # USERS
+            # -----------------------------
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id INTEGER PRIMARY KEY,
+                    username TEXT,
+                    language TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # -----------------------------
+            # MAILBOXES
+            # -----------------------------
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS mailboxes (
+                    user_id INTEGER PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    token TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(user_id)
+                        REFERENCES users(user_id)
+                        ON DELETE CASCADE
+                )
+            """)
+
+            conn.commit()
+
+        finally:
+
+            conn.close()
 
 
 # =========================================================
-# USER
+# SAVE USER
 # =========================================================
 
-def save_user(user_id, username=None):
+def save_user(
+    user_id,
+    username=None
+):
 
-    conn = get_connection()
+    with _db_lock:
 
-    cursor = conn.cursor()
+        conn = get_connection()
 
-    cursor.execute("""
-        INSERT INTO users (
-            user_id,
-            username
-        )
-        VALUES (?, ?)
+        try:
 
-        ON CONFLICT(user_id)
-        DO UPDATE SET
-            username = excluded.username
-    """, (
-        user_id,
-        username
-    ))
+            cursor = conn.cursor()
 
-    conn.commit()
-    conn.close()
+            cursor.execute("""
+                INSERT INTO users (
+                    user_id,
+                    username
+                )
+                VALUES (?, ?)
 
+                ON CONFLICT(user_id)
+                DO UPDATE SET
+                    username = excluded.username,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (
+                int(user_id),
+                username
+            ))
+
+            conn.commit()
+
+        finally:
+
+            conn.close()
+
+
+# =========================================================
+# GET LANGUAGE
+# =========================================================
 
 def get_language(user_id):
 
-    conn = get_connection()
+    with _db_lock:
 
-    cursor = conn.cursor()
+        conn = get_connection()
 
-    cursor.execute("""
-        SELECT language
-        FROM users
-        WHERE user_id = ?
-    """, (
-        user_id,
-    ))
+        try:
 
-    row = cursor.fetchone()
+            cursor = conn.cursor()
 
-    conn.close()
+            cursor.execute("""
+                SELECT language
+                FROM users
+                WHERE user_id = ?
+            """, (
+                int(user_id),
+            ))
 
-    if row:
-        return row["language"]
+            row = cursor.fetchone()
 
-    return None
+            if not row:
+                return None
 
+            return row["language"]
+
+        finally:
+
+            conn.close()
+
+
+# =========================================================
+# SET LANGUAGE
+# =========================================================
 
 def set_language(
     user_id,
     language
 ):
 
-    conn = get_connection()
+    with _db_lock:
 
-    cursor = conn.cursor()
+        conn = get_connection()
 
-    cursor.execute("""
-        UPDATE users
-        SET language = ?
-        WHERE user_id = ?
-    """, (
-        language,
-        user_id
-    ))
+        try:
 
-    conn.commit()
-    conn.close()
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                INSERT INTO users (
+                    user_id,
+                    language
+                )
+                VALUES (?, ?)
+
+                ON CONFLICT(user_id)
+                DO UPDATE SET
+                    language = excluded.language,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (
+                int(user_id),
+                language
+            ))
+
+            conn.commit()
+
+        finally:
+
+            conn.close()
 
 
 # =========================================================
-# MAILBOX
+# SAVE MAILBOX
 # =========================================================
 
 def save_mailbox(
@@ -136,124 +206,220 @@ def save_mailbox(
     token
 ):
 
-    conn = get_connection()
+    with _db_lock:
 
-    cursor = conn.cursor()
+        conn = get_connection()
 
-    cursor.execute("""
-        INSERT INTO mailboxes (
-            user_id,
-            email,
-            token
-        )
-        VALUES (?, ?, ?)
+        try:
 
-        ON CONFLICT(user_id)
-        DO UPDATE SET
-            email = excluded.email,
-            token = excluded.token,
-            created_at = CURRENT_TIMESTAMP
-    """, (
-        user_id,
-        email,
-        token
-    ))
+            cursor = conn.cursor()
 
-    conn.commit()
-    conn.close()
+            cursor.execute("""
+                INSERT INTO mailboxes (
+                    user_id,
+                    email,
+                    token
+                )
+                VALUES (?, ?, ?)
 
+                ON CONFLICT(user_id)
+                DO UPDATE SET
+                    email = excluded.email,
+                    token = excluded.token,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (
+                int(user_id),
+                str(email),
+                str(token)
+            ))
+
+            conn.commit()
+
+        finally:
+
+            conn.close()
+
+
+# =========================================================
+# GET MAILBOX
+# =========================================================
 
 def get_mailbox(user_id):
 
-    conn = get_connection()
+    with _db_lock:
 
-    cursor = conn.cursor()
+        conn = get_connection()
 
-    cursor.execute("""
-        SELECT
-            email,
-            token,
-            created_at
-        FROM mailboxes
-        WHERE user_id = ?
-    """, (
-        user_id,
-    ))
+        try:
 
-    row = cursor.fetchone()
+            cursor = conn.cursor()
 
-    conn.close()
+            cursor.execute("""
+                SELECT
+                    user_id,
+                    email,
+                    token,
+                    created_at,
+                    updated_at
+                FROM mailboxes
+                WHERE user_id = ?
+            """, (
+                int(user_id),
+            ))
 
-    if row:
+            row = cursor.fetchone()
 
-        return {
-            "email": row["email"],
-            "token": row["token"],
-            "created_at": row["created_at"]
-        }
+            if not row:
+                return None
 
-    return None
+            return {
+                "user_id": row["user_id"],
+                "email": row["email"],
+                "token": row["token"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
 
+        finally:
+
+            conn.close()
+
+
+# =========================================================
+# DELETE MAILBOX
+# =========================================================
 
 def delete_mailbox(user_id):
 
-    conn = get_connection()
+    with _db_lock:
 
-    cursor = conn.cursor()
+        conn = get_connection()
 
-    cursor.execute("""
-        DELETE FROM mailboxes
-        WHERE user_id = ?
-    """, (
-        user_id,
-    ))
+        try:
 
-    conn.commit()
-    conn.close()
+            cursor = conn.cursor()
 
+            cursor.execute("""
+                DELETE FROM mailboxes
+                WHERE user_id = ?
+            """, (
+                int(user_id),
+            ))
 
-# =========================================================
-# USER COUNT
-# =========================================================
+            conn.commit()
 
-def get_user_count():
+        finally:
 
-    conn = get_connection()
-
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT COUNT(*) AS total
-        FROM users
-    """)
-
-    row = cursor.fetchone()
-
-    conn.close()
-
-    return row["total"]
+            conn.close()
 
 
 # =========================================================
-# ALL USERS
+# GET ALL USERS
 # =========================================================
 
 def get_all_users():
 
-    conn = get_connection()
+    with _db_lock:
 
-    cursor = conn.cursor()
+        conn = get_connection()
 
-    cursor.execute("""
-        SELECT user_id
-        FROM users
-    """)
+        try:
 
-    rows = cursor.fetchall()
+            cursor = conn.cursor()
 
-    conn.close()
+            cursor.execute("""
+                SELECT user_id
+                FROM users
+                ORDER BY user_id
+            """)
 
-    return [
-        row["user_id"]
-        for row in rows
-  ]
+            rows = cursor.fetchall()
+
+            return [
+                row["user_id"]
+                for row in rows
+            ]
+
+        finally:
+
+            conn.close()
+
+
+# =========================================================
+# GET USER COUNT
+# =========================================================
+
+def get_user_count():
+
+    with _db_lock:
+
+        conn = get_connection()
+
+        try:
+
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT COUNT(*) AS total
+                FROM users
+            """)
+
+            row = cursor.fetchone()
+
+            return int(row["total"])
+
+        finally:
+
+            conn.close()
+
+
+# =========================================================
+# GET MAILBOX COUNT
+# =========================================================
+
+def get_mailbox_count():
+
+    with _db_lock:
+
+        conn = get_connection()
+
+        try:
+
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT COUNT(*) AS total
+                FROM mailboxes
+            """)
+
+            row = cursor.fetchone()
+
+            return int(row["total"])
+
+        finally:
+
+            conn.close()
+
+
+# =========================================================
+# GET STATS
+# =========================================================
+
+def get_stats():
+
+    return {
+        "users": get_user_count(),
+        "mailboxes": get_mailbox_count()
+    }
+
+
+# =========================================================
+# AUTO INIT
+# =========================================================
+
+if __name__ == "__main__":
+
+    init_db()
+
+    print("✅ Database initialized successfully.")
+    print(f"📁 Database: {DB_FILE}")
