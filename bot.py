@@ -4,6 +4,7 @@ import logging
 import random
 import re
 import string
+from typing import Optional
 
 import aiohttp
 
@@ -22,7 +23,6 @@ from telegram.ext import (
 )
 
 from config import BOT_TOKEN, ADMIN_IDS
-
 from database import (
     init_db,
     save_user,
@@ -38,16 +38,11 @@ from database import (
 # SETTINGS
 # =========================================================
 
+# Mail.tm API
 API_BASE = "https://api.mail.tm"
 
-POLL_INTERVAL = 3
-
-HTTP_TIMEOUT = 10
-
-
-# =========================================================
-# LOGGING
-# =========================================================
+POLL_INTERVAL = 5
+HTTP_TIMEOUT = 15
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -62,9 +57,7 @@ logger = logging.getLogger(__name__)
 # =========================================================
 
 TEXT = {
-
     "en": {
-
         "welcome":
             "👋 <b>Welcome to Temp Mail Bot!</b>\n\n"
             "📧 Create a temporary email and receive verification codes instantly.\n\n"
@@ -86,14 +79,9 @@ TEXT = {
             "🟢 <b>Status:</b> Active\n\n"
             "You can now receive emails here.",
 
-        "generate":
-            "➕ Generate New",
-
-        "inbox":
-            "📥 Inbox",
-
-        "refresh":
-            "🔄 Refresh",
+        "generate": "➕ Generate New",
+        "inbox": "📥 Inbox",
+        "refresh": "🔄 Refresh",
 
         "checking":
             "🔎 <b>Checking your inbox...</b>",
@@ -128,8 +116,7 @@ TEXT = {
             "<code>{code}</code>\n\n"
             "👇 Tap the button below to copy the code.",
 
-        "copy_code":
-            "📋 Copy Code",
+        "copy_code": "📋 Copy Code",
 
         "refresh_done":
             "🔄 <b>Inbox refreshed!</b>\n\n"
@@ -144,7 +131,7 @@ TEXT = {
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "➕ Generate New — Create a new email\n"
             "📥 Inbox — View received emails\n"
-            "🔄 Refresh — Check new emails\n"
+            "🔄 Refresh — Check new emails\n\n"
             "/language — Change language\n"
             "/stats — Bot statistics\n"
             "/help — Show help\n"
@@ -162,8 +149,7 @@ TEXT = {
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      🔐 <b>ADMIN ONLY</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "Sorry! This command is available\n"
-            "only for administrators.\n\n"
+            "Sorry! This command is available only for administrators.\n\n"
             "❌ You don't have permission.",
 
         "broadcast_start":
@@ -192,9 +178,7 @@ TEXT = {
             "🟢 <b>Status:</b> Online",
     },
 
-
     "bn": {
-
         "welcome":
             "👋 <b>Temp Mail Bot-এ স্বাগতম!</b>\n\n"
             "📧 Temporary Email তৈরি করে দ্রুত Verification Code গ্রহণ করুন।\n\n"
@@ -216,14 +200,9 @@ TEXT = {
             "🟢 <b>Status:</b> Active\n\n"
             "এখন এই Email-এ Message গ্রহণ করতে পারবেন।",
 
-        "generate":
-            "➕ নতুন তৈরি করুন",
-
-        "inbox":
-            "📥 ইনবক্স",
-
-        "refresh":
-            "🔄 রিফ্রেশ",
+        "generate": "➕ নতুন তৈরি করুন",
+        "inbox": "📥 ইনবক্স",
+        "refresh": "🔄 রিফ্রেশ",
 
         "checking":
             "🔎 <b>আপনার Inbox check করা হচ্ছে...</b>",
@@ -258,8 +237,7 @@ TEXT = {
             "<code>{code}</code>\n\n"
             "👇 Code Copy করতে নিচের Button চাপুন।",
 
-        "copy_code":
-            "📋 Code Copy করুন",
+        "copy_code": "📋 Code Copy করুন",
 
         "refresh_done":
             "🔄 <b>Inbox Refresh হয়েছে!</b>\n\n"
@@ -274,7 +252,7 @@ TEXT = {
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "➕ নতুন তৈরি করুন — নতুন Email\n"
             "📥 ইনবক্স — আসা Email দেখুন\n"
-            "🔄 রিফ্রেশ — নতুন Email check করুন\n"
+            "🔄 রিফ্রেশ — নতুন Email check করুন\n\n"
             "/language — ভাষা পরিবর্তন\n"
             "/stats — Bot Statistics\n"
             "/help — Help দেখুন\n"
@@ -292,8 +270,7 @@ TEXT = {
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      🔐 <b>ADMIN ONLY</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "দুঃখিত! এই Command শুধুমাত্র\n"
-            "Administrator-এর জন্য।\n\n"
+            "দুঃখিত! এই Command শুধুমাত্র Administrator-এর জন্য।\n\n"
             "❌ আপনার অনুমতি নেই।",
 
         "broadcast_start":
@@ -322,9 +299,7 @@ TEXT = {
             "🟢 <b>Status:</b> Online",
     },
 
-
     "hi": {
-
         "welcome":
             "👋 <b>Temp Mail Bot mein aapka swagat hai!</b>\n\n"
             "📧 Temporary Email banayein aur Verification Code receive karein.\n\n"
@@ -346,14 +321,9 @@ TEXT = {
             "🟢 <b>Status:</b> Active\n\n"
             "Ab aap is Email par messages receive kar sakte hain.",
 
-        "generate":
-            "➕ Naya Generate",
-
-        "inbox":
-            "📥 Inbox",
-
-        "refresh":
-            "🔄 Refresh",
+        "generate": "➕ Naya Generate",
+        "inbox": "📥 Inbox",
+        "refresh": "🔄 Refresh",
 
         "checking":
             "🔎 <b>Aapka Inbox check ho raha hai...</b>",
@@ -388,8 +358,7 @@ TEXT = {
             "<code>{code}</code>\n\n"
             "👇 Code copy karne ke liye button dabayein.",
 
-        "copy_code":
-            "📋 Copy Code",
+        "copy_code": "📋 Copy Code",
 
         "refresh_done":
             "🔄 <b>Inbox refresh ho gaya!</b>\n\n"
@@ -404,7 +373,7 @@ TEXT = {
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "➕ Naya Generate — Naya Email\n"
             "📥 Inbox — Received emails dekhein\n"
-            "🔄 Refresh — Naye emails check karein\n"
+            "🔄 Refresh — Naye emails check karein\n\n"
             "/language — Language change karein\n"
             "/stats — Bot Statistics\n"
             "/help — Help dekhein\n"
@@ -415,15 +384,14 @@ TEXT = {
             "      📧 <b>TEMP MAIL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "Fast Temporary Email receiver.\n\n"
-            "⚡ Mail.tm API se powered\n"
+            "⚡ Mail.tm se powered\n"
             "🔒 API key ki zarurat nahi",
 
         "admin_only":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      🔐 <b>ADMIN ONLY</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "Maaf kijiye! Yeh command sirf\n"
-            "Administrator ke liye hai.\n\n"
+            "Maaf kijiye! Yeh command sirf Administrator ke liye hai.\n\n"
             "❌ Aapko permission nahi hai.",
 
         "broadcast_start":
@@ -450,80 +418,68 @@ TEXT = {
             "📧 <b>Active Mailboxes:</b> {mailboxes}\n\n"
             "⚡ <b>API:</b> Mail.tm\n"
             "🟢 <b>Status:</b> Online",
-    }
+    },
 }
 
 
 # =========================================================
-# LANGUAGE KEYBOARD
+# KEYBOARDS
 # =========================================================
 
 def language_keyboard():
-
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
                 "🇺🇸 English",
-                callback_data="lang_en"
+                callback_data="lang_en",
             )
         ],
         [
             InlineKeyboardButton(
                 "🇧🇩 বাংলা",
-                callback_data="lang_bn"
+                callback_data="lang_bn",
             )
         ],
         [
             InlineKeyboardButton(
                 "🇮🇳 Hindi",
-                callback_data="lang_hi"
+                callback_data="lang_hi",
             )
-        ]
+        ],
     ])
 
 
-# =========================================================
-# MAIN KEYBOARD
-# =========================================================
-
 def main_keyboard(lang):
-
     t = TEXT[lang]
 
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
                 t["generate"],
-                callback_data="generate"
+                callback_data="generate",
             ),
             InlineKeyboardButton(
                 t["inbox"],
-                callback_data="inbox"
-            )
+                callback_data="inbox",
+            ),
         ],
         [
             InlineKeyboardButton(
                 t["refresh"],
-                callback_data="refresh"
+                callback_data="refresh",
             )
-        ]
+        ],
     ])
 
 
-# =========================================================
-# CODE COPY BUTTON
-# =========================================================
-
 def code_keyboard(code, lang):
-
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                t["copy_code"]
-                if False else TEXT[lang]["copy_code"],
+                TEXT[lang]["copy_code"],
                 copy_text=CopyTextButton(
                     text=str(code)
-                )
+                ),
             )
         ]
     ])
@@ -533,9 +489,18 @@ def code_keyboard(code, lang):
 # HELPERS
 # =========================================================
 
-def user_lang(user_id):
+def safe(value):
+    if value is None:
+        return ""
 
-    lang = get_language(user_id)
+    return html.escape(str(value))
+
+
+def user_lang(user_id):
+    try:
+        lang = get_language(user_id)
+    except Exception:
+        lang = None
 
     if lang not in TEXT:
         return "en"
@@ -543,102 +508,106 @@ def user_lang(user_id):
     return lang
 
 
-def safe(value):
-
-    if value is None:
-        return ""
-
-    return html.escape(str(value))
-
-
 def is_admin(user_id):
+    try:
+        return int(user_id) in [
+            int(x) for x in ADMIN_IDS
+        ]
+    except Exception:
+        return False
 
-    return user_id in ADMIN_IDS
+
+def get_users_list():
+    try:
+        users = get_all_users()
+
+        if users is None:
+            return []
+
+        return list(users)
+
+    except Exception as error:
+        logger.error(
+            "Could not get users: %s",
+            error,
+        )
+        return []
 
 
 def extract_code(text):
-
     if not text:
         return None
 
     text = str(text)
 
-    # Remove HTML tags
-    clean_text = re.sub(
-        r"<[^>]+>",
-        " ",
-        text
-    )
-
-    # Decode HTML entities
-    clean_text = html.unescape(
-        clean_text
-    )
-
-    # Normalize whitespace
-    clean_text = re.sub(
-        r"\s+",
-        " ",
-        clean_text
-    ).strip()
-
     patterns = [
+        r"(?:verification\s*code|verification|verify|security\s*code|one[- ]?time\s*password|otp|code|pin)"
+        r"\D{0,40}(\d{8})",
 
-        r"(?:code|otp|verification\s*code|verify\s*code|security\s*code|pin)"
-        r"\s*(?:is|:|-)?\s*(\d{4,8})",
+        r"(?:verification\s*code|verification|verify|security\s*code|one[- ]?time\s*password|otp|code|pin)"
+        r"\D{0,40}(\d{7})",
 
-        r"(?:verification|confirmation|security)"
-        r".{0,50}?(\d{4,8})",
+        r"(?:verification\s*code|verification|verify|security\s*code|one[- ]?time\s*password|otp|code|pin)"
+        r"\D{0,40}(\d{6})",
 
-        r"\b(\d{6})\b",
+        r"(?:verification\s*code|verification|verify|security\s*code|one[- ]?time\s*password|otp|code|pin)"
+        r"\D{0,40}(\d{5})",
 
-        r"\b(\d{5})\b",
+        r"(?:verification\s*code|verification|verify|security\s*code|one[- ]?time\s*password|otp|code|pin)"
+        r"\D{0,40}(\d{4})",
 
-        r"\b(\d{4})\b",
+        r"\b\d{8}\b",
+        r"\b\d{7}\b",
+        r"\b\d{6}\b",
+        r"\b\d{5}\b",
+        r"\b\d{4}\b",
     ]
 
     for pattern in patterns:
-
         match = re.search(
             pattern,
-            clean_text,
-            re.IGNORECASE
+            text,
+            re.IGNORECASE,
         )
 
         if match:
-            return match.group(1)
+            if match.lastindex:
+                return match.group(1)
+
+            return match.group(0)
 
     return None
 
 
 def clean_body(text):
-
     if not text:
         return ""
 
     text = str(text)
 
     text = re.sub(
-        r"<[^>]+>",
-        " ",
-        text
+        r"\r\n?",
+        "\n",
+        text,
     )
-
-    text = html.unescape(text)
 
     text = re.sub(
         r"\n\s*\n\s*\n+",
         "\n\n",
-        text
-    )
-
-    text = re.sub(
-        r"[ \t]+",
-        " ",
-        text
+        text,
     )
 
     return text.strip()
+
+
+def message_members(data):
+    if not data:
+        return []
+
+    return data.get(
+        "hydra:member",
+        data.get("member", []),
+    )
 
 
 # =========================================================
@@ -649,24 +618,19 @@ async def api_request(
     method,
     endpoint,
     token=None,
-    json_data=None
+    json_data=None,
 ):
-
     url = API_BASE + endpoint
 
     headers = {
         "Accept": "application/json",
-        "User-Agent": "TempMailTelegramBot/1.0"
+        "User-Agent": "TempMailTelegramBot/2.0",
     }
 
     if json_data is not None:
-
-        headers["Content-Type"] = (
-            "application/json"
-        )
+        headers["Content-Type"] = "application/json"
 
     if token:
-
         headers["Authorization"] = (
             f"Bearer {token}"
         )
@@ -676,7 +640,6 @@ async def api_request(
     )
 
     try:
-
         async with aiohttp.ClientSession(
             timeout=timeout
         ) as session:
@@ -685,599 +648,39 @@ async def api_request(
                 method,
                 url,
                 headers=headers,
-                json=json_data
+                json=json_data,
             ) as response:
 
                 if response.status >= 400:
-
-                    text = await response.text()
-
-                    logger.error(
-                        "Mail.tm HTTP %s: %s",
-                        response.status,
-                        text[:500]
-                    )
-
-                    return None
-
-                return await response.json()
-
-    except asyncio.TimeoutError:
-
-        logger.error(
-            "Mail.tm request timeout: %s",
-            endpoint
-        )
-
-        return None
-
-    except Exception as error:
-
-        logger.error(
-            "Mail.tm API error: %s",
-            error
-        )
-
-        return None
-
-
-# =========================================================
-# MAIL.TM DOMAIN
-# =========================================================
-
-async def get_domain():
-
-    data = await api_request(
-        "GET",
-        "/domains"
-    )
-
-    if not data:
-        return None
-
-    domains = data.get(
-        "hydra:member",
-        []
-    )
-
-    active_domains = [
-        item.get("domain")
-        for item in domains
-        if item.get("domain")
-        and item.get(
-            "isActive",
-            True
-        )
-    ]
-
-    if not active_domains:
-        return None
-
-    return random.choice(
-        active_domains
-    )
-
-
-# =========================================================
-# CREATE MAILBOX
-# =========================================================
-
-async def create_mailbox():
-
-    domain = await get_domain()
-
-    if not domain:
-        return None
-
-    username = (
-        "user-"
-        + "".join(
-            random.choices(
-                string.ascii_lowercase
-                + string.digits,
-                k=10
-            )
-        )
-    )
-
-    email = (
-        f"{username}@{domain}"
-    )
-
-    password = (
-        "Tmp!"
-        + "".join(
-            random.choices(
-                string.ascii_letters
-                + string.digits,
-                k=18
-            )
-        )
-    )
-
-    account = await api_request(
-        "POST",
-        "/accounts",
-        json_data={
-            "address": email,
-            "password": password
-        }
-    )
-
-    if not account:
-        return None
-
-    token_data = await api_request(
-        "POST",
-        "/token",
-        json_data={
-            "address": email,
-            "password": password
-        }
-    )
-
-    if not token_data:
-        return None
-
-    token = token_data.get(
-        "token"
-    )
-
-    account_id = account.get(
-        "id"
-    )
-
-    if not token:
-        return None
-
-    return {
-        "email": email,
-        "password": password,
-        "token": token,
-        "id": account_id
-    }
-
-
-# =========================================================
-# GET MESSAGES
-# =========================================================
-
-async def get_messages(token):
-
-    return await api_request(
-        "GET",
-        "/messages",
-        token=token
-    )
-
-
-async def get_full_message(
-    token,
-    message_id
-):
-
-    return await api_request(
-        "GET",
-        f"/messages/{message_id}",
-        token=token
-    )
-
-
-# =========================================================
-# MESSAGE CACHE
-# =========================================================
-
-seen_messages = {}
-
-
-# =========================================================
-# MESSAGE MEMBERS
-# =========================================================
-
-def message_members(data):
-
-    if not data:
-        return []
-
-    return data.get(
-        "hydra:member",
-        []
-    )
-
-
-# =========================================================
-# SEND MAIL
-# =========================================================
-
-async def send_mail_to_user(
-    bot,
-    user_id,
-    mail,
-    lang
-):
-
-    t = TEXT[lang]
-
-    sender_data = mail.get(
-        "from",
-        {}
-    )
-
-    if isinstance(
-        sender_data,
-        dict
-    ):
-
-        sender = (
-            sender_data.get("address")
-            or sender_data.get("name")
-            or "Unknown"
-        )
-
-    else:
-
-        sender = str(
-            sender_data
-        )
-
-    subject = (
-        mail.get("subject")
-        or "(No Subject)"
-    )
-
-    date = (
-        mail.get("createdAt")
-        or mail.get("date")
-        or ""
-    )
-
-    text_body = (
-        mail.get("text")
-        or ""
-    )
-
-    html_body = (
-        mail.get("html")
-        or ""
-    )
-
-    intro = (
-        mail.get("intro")
-        or ""
-    )
-
-    body = (
-        text_body
-        or intro
-    )
-
-    if not body and html_body:
-
-        body = re.sub(
-            r"<[^>]+>",
-            " ",
-            html_body
-        )
-
-        body = html.unescape(
-            body
-        )
-
-    body = clean_body(
-        body
-    )
-
-    if not body:
-
-        body = "📭 Empty message"
-
-    message_text = t[
-        "new_mail"
-    ].format(
-        sender=safe(sender),
-        subject=safe(subject),
-        date=safe(date),
-        body=safe(body[:2500])
-    )
-
-    try:
-
-        await bot.send_message(
-            chat_id=user_id,
-            text=message_text,
-            parse_mode="HTML"
-        )
-
-        # Search code in text
-        code = extract_code(
-            body
-        )
-
-        # Search subject
-        if not code:
-
-            code = extract_code(
-                subject
-            )
-
-        # Search HTML
-        if not code and html_body:
-
-            code = extract_code(
-                html_body
-            )
-
-        if code:
-
-            await bot.send_message(
-                chat_id=user_id,
-                text=t[
-                    "verification"
-                ].format(
-                    code=safe(code)
-                ),
-                reply_markup=code_keyboard(
-                    code,
-                    lang
-                ),
-                parse_mode="HTML"
-            )
-
-    except Exception as error:
-
-        logger.error(
-            "Failed sending email to %s: %s",
-            user_id,
-            error
-        )
-
-
-# =========================================================
-# GENERATE NEW EMAIL
-# =========================================================
-
-async def generate_new(
-    message,
-    user_id,
-    lang
-):
-
-    t = TEXT[lang]
-
-    loading = await message.reply_text(
-        t["generating"],
-        parse_mode="HTML"
-    )
-
-    mailbox = await create_mailbox()
-
-    if not mailbox:
-
-        await loading.edit_text(
-            t["api_error"],
-            parse_mode="HTML"
-        )
-
-        return
-
-    email = mailbox["email"]
-    token = mailbox["token"]
-
-    save_mailbox(
-        user_id,
-        email,
-        token
-    )
-
-    # Reset cache
-    seen_messages[user_id] = set()
-
-    # Existing messages shouldn't be
-    # treated as new.
-    initial = await get_messages(
-        token
-    )
-
-    if initial:
-
-        for item in message_members(
-            initial
-        ):
-
-            message_id = item.get(
-                "id"
-            )
-
-            if message_id:
-
-                seen_messages[
-                    user_id
-                ].add(
-                    message_id
-                )
-
-    await loading.edit_text(
-        t["created"].format(
-            email=safe(email)
-        ),
-        reply_markup=main_keyboard(
-            lang
-        ),
-        parse_mode="HTML"
-)
-    # =========================================================
-# PART 2 — INBOX + OTP + REFRESH + AUTO CHECKER + ADMIN
-# =========================================================
-
-# =========================================================
-# HELPERS
-# =========================================================
-
-def get_user_lang(user_id):
-    lang = get_language(user_id)
-
-    if lang not in TEXT:
-        return "en"
-
-    return lang
-
-
-def escape_html(value):
-    if value is None:
-        return ""
-
-    return html.escape(str(value))
-
-
-def extract_code(text):
-    """
-    Detect common OTP / verification codes.
-    Supports 4, 5 and 6 digit codes.
-    """
-
-    if not text:
-        return None
-
-    text = str(text)
-
-    patterns = [
-        r"(?:verification\s*code|verification\s*pin|security\s*code|"
-        r"confirmation\s*code|confirm\s*code|one[-\s]?time\s*password|"
-        r"\botp\b|\bpin\b|\bcode\b)"
-        r"\D{0,40}(\d{6})",
-
-        r"(?:verification\s*code|verification\s*pin|security\s*code|"
-        r"confirmation\s*code|confirm\s*code|one[-\s]?time\s*password|"
-        r"\botp\b|\bpin\b|\bcode\b)"
-        r"\D{0,40}(\d{5})",
-
-        r"(?:verification\s*code|verification\s*pin|security\s*code|"
-        r"confirmation\s*code|confirm\s*code|one[-\s]?time\s*password|"
-        r"\botp\b|\bpin\b|\bcode\b)"
-        r"\D{0,40}(\d{4})",
-
-        r"\b\d{6}\b",
-        r"\b\d{5}\b",
-        r"\b\d{4}\b",
-    ]
-
-    for pattern in patterns:
-
-        match = re.search(
-            pattern,
-            text,
-            re.IGNORECASE
-        )
-
-        if match:
-
-            if match.lastindex:
-                return match.group(1)
-
-            return match.group(0)
-
-    return None
-
-
-def clean_text(text):
-
-    if not text:
-        return ""
-
-    text = str(text)
-
-    text = re.sub(
-        r"\n\s*\n\s*\n+",
-        "\n\n",
-        text
-    )
-
-    return text.strip()
-
-
-# =========================================================
-# MESSAGE CACHE
-# =========================================================
-
-# user_id -> set(message_ids)
-seen_messages = {}
-
-
-# =========================================================
-# MAIL.GW API
-# =========================================================
-
-async def api_request(
-    method,
-    endpoint,
-    token=None,
-    json_data=None
-):
-
-    url = API_BASE + endpoint
-
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "TempMailTelegramBot/2.0"
-    }
-
-    if token:
-        headers["Authorization"] = (
-            f"Bearer {token}"
-        )
-
-    if json_data is not None:
-        headers["Content-Type"] = (
-            "application/json"
-        )
-
-    timeout = aiohttp.ClientTimeout(
-        total=HTTP_TIMEOUT
-    )
-
-    try:
-
-        async with aiohttp.ClientSession(
-            timeout=timeout
-        ) as session:
-
-            async with session.request(
-                method,
-                url,
-                headers=headers,
-                json=json_data
-            ) as response:
-
-                if response.status >= 400:
-
                     error_text = await response.text()
 
                     logger.error(
-                        "API HTTP %s: %s",
+                        "Mail API HTTP %s: %s",
                         response.status,
-                        error_text[:500]
+                        error_text[:500],
                     )
 
                     return None
 
-                return await response.json()
+                try:
+                    return await response.json(
+                        content_type=None
+                    )
+                except Exception:
+                    return None
 
     except asyncio.TimeoutError:
-
         logger.error(
             "API timeout: %s",
-            endpoint
+            endpoint,
         )
-
         return None
 
     except Exception as error:
-
         logger.error(
             "API error: %s",
-            error
+            error,
         )
-
         return None
 
 
@@ -1286,10 +689,9 @@ async def api_request(
 # =========================================================
 
 async def get_domain():
-
     data = await api_request(
         "GET",
-        "/domains"
+        "/domains",
     )
 
     if not data:
@@ -1300,23 +702,15 @@ async def get_domain():
         []
     )
 
-    if not domains:
-        return None
-
     active = []
 
     for item in domains:
+        domain = item.get("domain")
 
-        domain = item.get(
-            "domain"
-        )
+        if not domain:
+            continue
 
-        is_active = item.get(
-            "isActive",
-            True
-        )
-
-        if domain and is_active:
+        if item.get("isActive", True):
             active.append(domain)
 
     if not active:
@@ -1330,7 +724,6 @@ async def get_domain():
 # =========================================================
 
 async def create_mailbox():
-
     domain = await get_domain()
 
     if not domain:
@@ -1342,14 +735,12 @@ async def create_mailbox():
             random.choices(
                 string.ascii_lowercase
                 + string.digits,
-                k=10
+                k=12,
             )
         )
     )
 
-    email = (
-        f"{username}@{domain}"
-    )
+    email = f"{username}@{domain}"
 
     password = (
         "Tmp!"
@@ -1357,7 +748,7 @@ async def create_mailbox():
             random.choices(
                 string.ascii_letters
                 + string.digits,
-                k=18
+                k=20,
             )
         )
     )
@@ -1367,8 +758,8 @@ async def create_mailbox():
         "/accounts",
         json_data={
             "address": email,
-            "password": password
-        }
+            "password": password,
+        },
     )
 
     if not account:
@@ -1379,20 +770,14 @@ async def create_mailbox():
         "/token",
         json_data={
             "address": email,
-            "password": password
-        }
+            "password": password,
+        },
     )
 
     if not token_data:
         return None
 
-    token = token_data.get(
-        "token"
-    )
-
-    account_id = account.get(
-        "id"
-    )
+    token = token_data.get("token")
 
     if not token:
         return None
@@ -1401,65 +786,59 @@ async def create_mailbox():
         "email": email,
         "password": password,
         "token": token,
-        "id": account_id
+        "id": account.get("id"),
     }
 
 
 # =========================================================
-# GET MESSAGES
+# MAIL API
 # =========================================================
 
 async def get_messages(token):
-
     return await api_request(
         "GET",
         "/messages",
-        token=token
+        token=token,
     )
 
-
-# =========================================================
-# GET FULL MESSAGE
-# =========================================================
 
 async def get_full_message(
     token,
-    message_id
+    message_id,
 ):
-
     return await api_request(
         "GET",
         f"/messages/{message_id}",
-        token=token
+        token=token,
     )
 
 
 # =========================================================
-# MESSAGE LIST
+# CACHE
 # =========================================================
 
-def get_message_list(data):
+seen_messages = {}
 
-    if not data:
-        return []
+mailbox_locks = {}
 
-    return data.get(
-        "hydra:member",
-        []
-    )
+
+def get_user_lock(user_id):
+    if user_id not in mailbox_locks:
+        mailbox_locks[user_id] = asyncio.Lock()
+
+    return mailbox_locks[user_id]
 
 
 # =========================================================
-# SEND EMAIL TO USER
+# SEND EMAIL
 # =========================================================
 
 async def send_mail_to_user(
     bot,
     user_id,
     mail,
-    lang
+    lang,
 ):
-
     t = TEXT[lang]
 
     sender_data = mail.get(
@@ -1467,22 +846,14 @@ async def send_mail_to_user(
         {}
     )
 
-    if isinstance(
-        sender_data,
-        dict
-    ):
-
+    if isinstance(sender_data, dict):
         sender = (
             sender_data.get("address")
             or sender_data.get("name")
             or "Unknown"
         )
-
     else:
-
-        sender = str(
-            sender_data
-        )
+        sender = str(sender_data)
 
     subject = (
         mail.get("subject")
@@ -1491,7 +862,7 @@ async def send_mail_to_user(
 
     date = (
         mail.get("createdAt")
-        or mail.get("updatedAt")
+        or mail.get("date")
         or ""
     )
 
@@ -1501,168 +872,176 @@ async def send_mail_to_user(
         or ""
     )
 
-    body = clean_text(body)
+    body = clean_body(body)
 
     if not body:
         body = "📭 Empty message"
 
-    message_text = t[
-        "new_mail"
-    ].format(
-        sender=escape_html(sender),
-        subject=escape_html(subject),
-        date=escape_html(date),
-        body=escape_html(
-            body[:3000]
-        )
+    message_text = t["new_mail"].format(
+        sender=safe(sender),
+        subject=safe(subject),
+        date=safe(date),
+        body=safe(body[:3500]),
     )
 
     try:
-
         await bot.send_message(
             chat_id=user_id,
             text=message_text,
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
 
-        # Search body first
         code = extract_code(body)
 
-        # If no code, search subject
         if not code:
             code = extract_code(subject)
 
         if code:
-
             await bot.send_message(
                 chat_id=user_id,
-                text=t[
-                    "verification"
-                ].format(
-                    code=escape_html(code)
+                text=t["verification"].format(
+                    code=safe(code)
                 ),
                 reply_markup=code_keyboard(
                     code,
-                    lang
+                    lang,
                 ),
-                parse_mode="HTML"
+                parse_mode="HTML",
             )
 
     except Exception as error:
-
         logger.error(
             "Could not send email to %s: %s",
             user_id,
-            error
+            error,
         )
 
 
 # =========================================================
-# GENERATE NEW EMAIL
+# GENERATE NEW
 # =========================================================
 
 async def generate_new(
     message,
     user_id,
-    lang
+    lang,
 ):
-
     t = TEXT[lang]
 
     loading = await message.reply_text(
         t["generating"],
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
     mailbox = await create_mailbox()
 
     if not mailbox:
+        try:
+            await loading.edit_text(
+                t["api_error"],
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
 
-        await loading.edit_text(
-            t["api_error"],
-            parse_mode="HTML"
-        )
-
-        return
-
-    email = mailbox["email"]
-    token = mailbox["token"]
+        return False
 
     save_mailbox(
         user_id,
-        email,
-        token
+        mailbox["email"],
+        mailbox["token"],
     )
 
-    # Reset cache
     seen_messages[user_id] = set()
 
-    # Existing emails should not be considered new
+    # Mark already-existing messages as seen.
     initial = await get_messages(
-        token
+        mailbox["token"]
     )
 
     if initial:
+        for item in message_members(initial):
+            mid = item.get("id")
 
-        for item in get_message_list(
-            initial
-        ):
+            if mid:
+                seen_messages[user_id].add(mid)
 
-            message_id = item.get(
-                "id"
-            )
+    try:
+        await loading.edit_text(
+            t["created"].format(
+                email=safe(mailbox["email"])
+            ),
+            reply_markup=main_keyboard(lang),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
 
-            if message_id:
+    return True
 
-                seen_messages[
-                    user_id
-                ].add(
-                    message_id
-                )
 
-    await loading.edit_text(
-        t["created"].format(
-            email=escape_html(email)
-        ),
-        reply_markup=main_keyboard(
-            lang
-        ),
-        parse_mode="HTML"
+# =========================================================
+# START
+# =========================================================
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    user = update.effective_user
+
+    if not user or not update.message:
+        return
+
+    save_user(
+        user.id,
+        user.username,
+    )
+
+    lang = get_language(user.id)
+
+    # FIRST TIME USER
+    if not lang:
+        await update.message.reply_text(
+            TEXT["en"]["welcome"],
+            reply_markup=language_keyboard(),
+            parse_mode="HTML",
+        )
+        return
+
+    # EXISTING USER
+    await generate_new(
+        update.message,
+        user.id,
+        user_lang(user.id),
     )
 
 
 # =========================================================
-# SHOW INBOX
+# INBOX
 # =========================================================
 
 async def show_inbox(
-    bot,
     message,
     user_id,
-    lang
+    lang,
+    bot,
 ):
-
     t = TEXT[lang]
 
-    mailbox = get_mailbox(
-        user_id
-    )
+    mailbox = get_mailbox(user_id)
 
     if not mailbox:
-
         await message.reply_text(
             t["no_mailbox"],
-            reply_markup=main_keyboard(
-                lang
-            ),
-            parse_mode="HTML"
+            reply_markup=main_keyboard(lang),
+            parse_mode="HTML",
         )
-
         return
 
     loading = await message.reply_text(
         t["checking"],
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
     data = await get_messages(
@@ -1670,64 +1049,55 @@ async def show_inbox(
     )
 
     if not data:
-
         await loading.edit_text(
             t["api_error"],
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
-
         return
 
-    messages = get_message_list(
-        data
-    )
+    messages = message_members(data)
 
     if not messages:
-
         await loading.edit_text(
             t["empty"],
-            reply_markup=main_keyboard(
-                lang
-            ),
-            parse_mode="HTML"
+            reply_markup=main_keyboard(lang),
+            parse_mode="HTML",
         )
-
         return
 
-    await loading.delete()
+    try:
+        await loading.delete()
+    except Exception:
+        pass
 
     if user_id not in seen_messages:
         seen_messages[user_id] = set()
 
-    # Latest 20 messages
-    messages = messages[:20]
+    # Inbox manually requested:
+    # show latest messages, including OTP.
+    latest = messages[:20]
 
-    for item in reversed(messages):
+    for item in reversed(latest):
+        mid = item.get("id")
 
-        message_id = item.get(
-            "id"
-        )
-
-        if not message_id:
+        if not mid:
             continue
 
         full_mail = await get_full_message(
             mailbox["token"],
-            message_id
+            mid,
         )
 
         if not full_mail:
             full_mail = item
 
-        seen_messages[
-            user_id
-        ].add(message_id)
+        seen_messages[user_id].add(mid)
 
         await send_mail_to_user(
             bot,
             user_id,
             full_mail,
-            lang
+            lang,
         )
 
 
@@ -1737,50 +1107,39 @@ async def show_inbox(
 
 async def inbox_command(
     update,
-    context
+    context,
 ):
-
     user_id = update.effective_user.id
-
-    lang = get_user_lang(
-        user_id
-    )
+    lang = user_lang(user_id)
 
     await show_inbox(
-        context.bot,
         update.message,
         user_id,
-        lang
+        lang,
+        context.bot,
     )
 
 
 # =========================================================
-# REFRESH
+# REFRESH COMMAND
 # =========================================================
 
 async def refresh_command(
     update,
-    context
+    context,
 ):
-
     user_id = update.effective_user.id
-    lang = get_user_lang(user_id)
+    lang = user_lang(user_id)
     t = TEXT[lang]
 
-    mailbox = get_mailbox(
-        user_id
-    )
+    mailbox = get_mailbox(user_id)
 
     if not mailbox:
-
         await update.message.reply_text(
             t["no_mailbox"],
-            reply_markup=main_keyboard(
-                lang
-            ),
-            parse_mode="HTML"
+            reply_markup=main_keyboard(lang),
+            parse_mode="HTML",
         )
-
         return
 
     data = await get_messages(
@@ -1788,28 +1147,20 @@ async def refresh_command(
     )
 
     if not data:
-
         await update.message.reply_text(
             t["api_error"],
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
-
         return
 
-    messages = get_message_list(
-        data
-    )
+    messages = message_members(data)
 
     if not messages:
-
         await update.message.reply_text(
             t["empty"],
-            reply_markup=main_keyboard(
-                lang
-            ),
-            parse_mode="HTML"
+            reply_markup=main_keyboard(lang),
+            parse_mode="HTML",
         )
-
         return
 
     if user_id not in seen_messages:
@@ -1817,34 +1168,27 @@ async def refresh_command(
 
     count = 0
 
-    for item in reversed(
-        messages[:20]
-    ):
+    for item in reversed(messages[:20]):
+        mid = item.get("id")
 
-        message_id = item.get(
-            "id"
-        )
-
-        if not message_id:
+        if not mid:
             continue
 
         full_mail = await get_full_message(
             mailbox["token"],
-            message_id
+            mid,
         )
 
         if not full_mail:
             full_mail = item
 
-        seen_messages[
-            user_id
-        ].add(message_id)
+        seen_messages[user_id].add(mid)
 
         await send_mail_to_user(
             context.bot,
             user_id,
             full_mail,
-            lang
+            lang,
         )
 
         count += 1
@@ -1853,32 +1197,26 @@ async def refresh_command(
         t["refresh_done"].format(
             count=count
         ),
-        reply_markup=main_keyboard(
-            lang
-        ),
-        parse_mode="HTML"
+        reply_markup=main_keyboard(lang),
+        parse_mode="HTML",
     )
 
 
 # =========================================================
-# LANGUAGE COMMAND
+# LANGUAGE
 # =========================================================
 
 async def language_command(
     update,
-    context
+    context,
 ):
-
     user_id = update.effective_user.id
-
-    lang = get_user_lang(
-        user_id
-    )
+    lang = user_lang(user_id)
 
     await update.message.reply_text(
         TEXT[lang]["language"],
         reply_markup=language_keyboard(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
@@ -1888,21 +1226,15 @@ async def language_command(
 
 async def help_command(
     update,
-    context
+    context,
 ):
-
     user_id = update.effective_user.id
-
-    lang = get_user_lang(
-        user_id
-    )
+    lang = user_lang(user_id)
 
     await update.message.reply_text(
         TEXT[lang]["help"],
-        reply_markup=main_keyboard(
-            lang
-        ),
-        parse_mode="HTML"
+        reply_markup=main_keyboard(lang),
+        parse_mode="HTML",
     )
 
 
@@ -1912,18 +1244,14 @@ async def help_command(
 
 async def about_command(
     update,
-    context
+    context,
 ):
-
     user_id = update.effective_user.id
-
-    lang = get_user_lang(
-        user_id
-    )
+    lang = user_lang(user_id)
 
     await update.message.reply_text(
         TEXT[lang]["about"],
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
@@ -1933,39 +1261,30 @@ async def about_command(
 
 async def stats_command(
     update,
-    context
+    context,
 ):
-
     user_id = update.effective_user.id
+    lang = user_lang(user_id)
+    t = TEXT[lang]
 
-    lang = get_user_lang(
-        user_id
-    )
-
-    users = list(
-        get_all_users()
-    )
+    users = get_users_list()
 
     total_users = len(users)
-
     active_mailboxes = 0
 
     for uid in users:
-
         try:
-
             if get_mailbox(uid):
                 active_mailboxes += 1
-
         except Exception:
             pass
 
     await update.message.reply_text(
-        TEXT[lang]["stats"].format(
+        t["stats"].format(
             users=total_users,
-            mailboxes=active_mailboxes
+            mailboxes=active_mailboxes,
         ),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
@@ -1973,19 +1292,13 @@ async def stats_command(
 # ADMIN ONLY
 # =========================================================
 
-async def admin_only(
-    update
-):
-
+async def admin_only(update):
     user_id = update.effective_user.id
-
-    lang = get_user_lang(
-        user_id
-    )
+    lang = user_lang(user_id)
 
     await update.message.reply_text(
         TEXT[lang]["admin_only"],
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
@@ -1995,24 +1308,21 @@ async def admin_only(
 
 async def admin_command(
     update,
-    context
+    context,
 ):
-
-    user_id = update.effective_user.id
-
-    if not is_admin(user_id):
-
+    if not is_admin(
+        update.effective_user.id
+    ):
         await admin_only(update)
-
         return
 
-    lang = get_user_lang(
-        user_id
+    lang = user_lang(
+        update.effective_user.id
     )
 
     await update.message.reply_text(
         TEXT[lang]["admin_panel"],
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
@@ -2022,77 +1332,60 @@ async def admin_command(
 
 async def broadcast_command(
     update,
-    context
+    context,
 ):
-
-    user_id = update.effective_user.id
-
-    if not is_admin(user_id):
-
+    if not is_admin(
+        update.effective_user.id
+    ):
         await admin_only(update)
-
         return
 
-    lang = get_user_lang(
-        user_id
+    lang = user_lang(
+        update.effective_user.id
     )
 
     if not context.args:
-
         await update.message.reply_text(
-            TEXT[lang][
-                "broadcast_start"
-            ],
-            parse_mode="HTML"
+            TEXT[lang]["broadcast_start"],
+            parse_mode="HTML",
         )
-
         return
 
     broadcast_text = " ".join(
         context.args
     )
 
-    users = list(
-        get_all_users()
-    )
+    users = get_users_list()
 
     sent = 0
     failed = 0
 
-    for target_id in users:
-
+    for user_id in users:
         try:
-
             await context.bot.send_message(
-                chat_id=target_id,
+                chat_id=user_id,
                 text=broadcast_text,
-                parse_mode="HTML"
+                parse_mode="HTML",
             )
 
             sent += 1
 
-            await asyncio.sleep(
-                0.1
-            )
+            await asyncio.sleep(0.1)
 
         except Exception as error:
-
             logger.warning(
-                "Broadcast failed %s: %s",
-                target_id,
-                error
+                "Broadcast failed for %s: %s",
+                user_id,
+                error,
             )
-
             failed += 1
 
     await update.message.reply_text(
-        TEXT[lang][
-            "broadcast_done"
-        ].format(
+        TEXT[lang]["broadcast_done"].format(
             sent=sent,
-            failed=failed
+            failed=failed,
         ),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
@@ -2100,156 +1393,106 @@ async def broadcast_command(
 # AUTOMATIC MAIL CHECKER
 # =========================================================
 
-async def automatic_mail_checker(
-    application
-):
-
+async def automatic_mail_checker(application):
     logger.info(
         "📨 Automatic Mail Checker Started"
     )
 
     while True:
-
         try:
-
-            users = list(
-                get_all_users()
-            )
+            users = get_users_list()
 
             for user_id in users:
-
                 try:
-
-                    mailbox = get_mailbox(
-                        user_id
-                    )
+                    mailbox = get_mailbox(user_id)
 
                     if not mailbox:
                         continue
 
-                    token = mailbox.get(
-                        "token"
-                    )
+                    token = mailbox.get("token")
 
                     if not token:
                         continue
 
-                    data = await get_messages(
-                        token
-                    )
+                    async with get_user_lock(user_id):
 
-                    if not data:
-                        continue
+                        data = await get_messages(token)
 
-                    messages = get_message_list(
-                        data
-                    )
-
-                    if user_id not in seen_messages:
-
-                        seen_messages[
-                            user_id
-                        ] = set()
-
-                    # First check:
-                    # Existing emails are ignored.
-                    if not seen_messages[
-                        user_id
-                    ]:
-
-                        for item in messages:
-
-                            mid = item.get(
-                                "id"
-                            )
-
-                            if mid:
-
-                                seen_messages[
-                                    user_id
-                                ].add(mid)
-
-                        continue
-
-                    new_messages = []
-
-                    for item in messages:
-
-                        mid = item.get(
-                            "id"
-                        )
-
-                        if not mid:
+                        if not data:
                             continue
 
-                        if mid not in seen_messages[
-                            user_id
-                        ]:
+                        messages = message_members(data)
 
-                            new_messages.append(
-                                item
+                        if user_id not in seen_messages:
+                            seen_messages[user_id] = set()
+
+                        # First check:
+                        # don't send old messages.
+                        if not seen_messages[user_id]:
+                            for item in messages:
+                                mid = item.get("id")
+
+                                if mid:
+                                    seen_messages[user_id].add(mid)
+
+                            continue
+
+                        new_messages = []
+
+                        for item in messages:
+                            mid = item.get("id")
+
+                            if not mid:
+                                continue
+
+                            if mid not in seen_messages[user_id]:
+                                new_messages.append(item)
+
+                        if not new_messages:
+                            continue
+
+                        lang = user_lang(user_id)
+
+                        # oldest -> newest
+                        for item in reversed(new_messages):
+                            mid = item.get("id")
+
+                            seen_messages[user_id].add(mid)
+
+                            full_mail = await get_full_message(
+                                token,
+                                mid,
                             )
 
-                    if not new_messages:
-                        continue
+                            if not full_mail:
+                                full_mail = item
 
-                    lang = get_user_lang(
-                        user_id
-                    )
-
-                    # Oldest first
-                    for item in reversed(
-                        new_messages
-                    ):
-
-                        mid = item.get(
-                            "id"
-                        )
-
-                        seen_messages[
-                            user_id
-                        ].add(mid)
-
-                        full_mail = await get_full_message(
-                            token,
-                            mid
-                        )
-
-                        if not full_mail:
-                            full_mail = item
-
-                        await send_mail_to_user(
-                            application.bot,
-                            user_id,
-                            full_mail,
-                            lang
-                        )
+                            await send_mail_to_user(
+                                application.bot,
+                                user_id,
+                                full_mail,
+                                lang,
+                            )
 
                 except Exception as error:
-
                     logger.error(
-                        "Auto checker error %s: %s",
+                        "Automatic check error for %s: %s",
                         user_id,
-                        error
+                        error,
                     )
 
-            await asyncio.sleep(
-                POLL_INTERVAL
-            )
+            await asyncio.sleep(POLL_INTERVAL)
 
         except asyncio.CancelledError:
-
             logger.info(
-                "📨 Mail checker stopped"
+                "Automatic Mail Checker stopped"
             )
-
             break
 
         except Exception as error:
-
             logger.error(
                 "Mail checker error: %s",
-                error
+                error,
             )
 
             await asyncio.sleep(
@@ -2263,12 +1506,14 @@ async def automatic_mail_checker(
 
 async def callback_handler(
     update,
-    context
+    context,
 ):
-
     query = update.callback_query
 
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     user_id = query.from_user.id
     data = query.data
@@ -2278,10 +1523,10 @@ async def callback_handler(
     # =====================================================
 
     if data.startswith("lang_"):
-
         lang = data.replace(
             "lang_",
-            ""
+            "",
+            1,
         )
 
         if lang not in TEXT:
@@ -2289,18 +1534,23 @@ async def callback_handler(
 
         set_language(
             user_id,
-            lang
+            lang,
         )
 
-        await query.edit_message_text(
-            TEXT[lang]["language_ok"],
-            parse_mode="HTML"
-        )
+        # Edit language selection message.
+        try:
+            await query.edit_message_text(
+                TEXT[lang]["language_ok"],
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
 
+        # Create email.
         await generate_new(
             query.message,
             user_id,
-            lang
+            lang,
         )
 
         return
@@ -2310,15 +1560,12 @@ async def callback_handler(
     # =====================================================
 
     if data == "generate":
-
-        lang = get_user_lang(
-            user_id
-        )
+        lang = user_lang(user_id)
 
         await generate_new(
             query.message,
             user_id,
-            lang
+            lang,
         )
 
         return
@@ -2328,16 +1575,13 @@ async def callback_handler(
     # =====================================================
 
     if data == "inbox":
-
-        lang = get_user_lang(
-            user_id
-        )
+        lang = user_lang(user_id)
 
         await show_inbox(
-            context.bot,
             query.message,
             user_id,
-            lang
+            lang,
+            context.bot,
         )
 
         return
@@ -2347,25 +1591,17 @@ async def callback_handler(
     # =====================================================
 
     if data == "refresh":
+        lang = user_lang(user_id)
+        t = TEXT[lang]
 
-        lang = get_user_lang(
-            user_id
-        )
-
-        mailbox = get_mailbox(
-            user_id
-        )
+        mailbox = get_mailbox(user_id)
 
         if not mailbox:
-
             await query.message.reply_text(
-                TEXT[lang]["no_mailbox"],
-                reply_markup=main_keyboard(
-                    lang
-                ),
-                parse_mode="HTML"
+                t["no_mailbox"],
+                reply_markup=main_keyboard(lang),
+                parse_mode="HTML",
             )
-
             return
 
         data_result = await get_messages(
@@ -2373,62 +1609,63 @@ async def callback_handler(
         )
 
         if not data_result:
-
             await query.message.reply_text(
-                TEXT[lang]["api_error"],
-                parse_mode="HTML"
+                t["api_error"],
+                parse_mode="HTML",
             )
-
             return
 
-        messages = get_message_list(
+        messages = message_members(
             data_result
         )
 
         if not messages:
-
             await query.message.reply_text(
-                TEXT[lang]["empty"],
-                reply_markup=main_keyboard(
-                    lang
-                ),
-                parse_mode="HTML"
+                t["empty"],
+                reply_markup=main_keyboard(lang),
+                parse_mode="HTML",
             )
-
             return
 
         if user_id not in seen_messages:
             seen_messages[user_id] = set()
 
-        for item in reversed(
-            messages[:20]
-        ):
+        count = 0
 
-            message_id = item.get(
-                "id"
-            )
+        for item in reversed(messages[:20]):
+            message_id = item.get("id")
 
             if not message_id:
                 continue
 
             full_mail = await get_full_message(
                 mailbox["token"],
-                message_id
+                message_id,
             )
 
             if not full_mail:
                 full_mail = item
 
-            seen_messages[
-                user_id
-            ].add(message_id)
+            seen_messages[user_id].add(
+                message_id
+            )
 
             await send_mail_to_user(
                 context.bot,
                 user_id,
                 full_mail,
-                lang
+                lang,
             )
+
+            count += 1
+
+        await query.message.reply_text(
+            t["refresh_done"].format(
+                count=count
+            ),
+            reply_markup=main_keyboard(lang),
+            parse_mode="HTML",
+        )
 
         return
 
@@ -2439,30 +1676,26 @@ async def callback_handler(
 
 async def error_handler(
     update,
-    context
+    context,
 ):
-
     logger.error(
         "Unhandled error",
-        exc_info=context.error
+        exc_info=context.error,
     )
 
 
 # =========================================================
-# POST INIT
+# STARTUP
 # =========================================================
 
-async def post_init(
-    application
-):
+async def post_init(application):
+    task = asyncio.create_task(
+        automatic_mail_checker(application)
+    )
 
     application.bot_data[
         "mail_checker"
-    ] = asyncio.create_task(
-        automatic_mail_checker(
-            application
-        )
-    )
+    ] = task
 
     logger.info(
         "🚀 Bot startup completed"
@@ -2470,28 +1703,23 @@ async def post_init(
 
 
 # =========================================================
-# POST SHUTDOWN
+# SHUTDOWN
 # =========================================================
 
-async def post_shutdown(
-    application
-):
-
+async def post_shutdown(application):
     task = application.bot_data.get(
         "mail_checker"
     )
 
-    if task:
+    if not task:
+        return
 
-        task.cancel()
+    task.cancel()
 
-        try:
-
-            await task
-
-        except asyncio.CancelledError:
-
-            pass
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 # =========================================================
@@ -2499,7 +1727,7 @@ async def post_shutdown(
 # =========================================================
 
 def main():
-
+    # Database initialize
     init_db()
 
     application = (
@@ -2517,49 +1745,49 @@ def main():
     application.add_handler(
         CommandHandler(
             "start",
-            start
+            start,
         )
     )
 
     application.add_handler(
         CommandHandler(
             "inbox",
-            inbox_command
+            inbox_command,
         )
     )
 
     application.add_handler(
         CommandHandler(
             "refresh",
-            refresh_command
+            refresh_command,
         )
     )
 
     application.add_handler(
         CommandHandler(
             "language",
-            language_command
+            language_command,
         )
     )
 
     application.add_handler(
         CommandHandler(
             "help",
-            help_command
+            help_command,
         )
     )
 
     application.add_handler(
         CommandHandler(
             "about",
-            about_command
+            about_command,
         )
     )
 
     application.add_handler(
         CommandHandler(
             "stats",
-            stats_command
+            stats_command,
         )
     )
 
@@ -2570,26 +1798,26 @@ def main():
     application.add_handler(
         CommandHandler(
             "admin",
-            admin_command
+            admin_command,
         )
     )
 
     application.add_handler(
         CommandHandler(
             "broadcast",
-            broadcast_command
+            broadcast_command,
         )
     )
 
     application.add_handler(
         CommandHandler(
             "boardchat",
-            broadcast_command
+            broadcast_command,
         )
     )
 
     # =====================================================
-    # CALLBACK
+    # CALLBACKS
     # =====================================================
 
     application.add_handler(
@@ -2606,8 +1834,8 @@ def main():
         error_handler
     )
 
-    print(
-        "🤖 Temp Mail Bot is running..."
+    logger.info(
+        "🤖 Temp Mail Bot is starting..."
     )
 
     application.run_polling(
@@ -2620,5 +1848,4 @@ def main():
 # =========================================================
 
 if __name__ == "__main__":
-
     main()
