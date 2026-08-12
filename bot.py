@@ -585,31 +585,18 @@ def main_keyboard(lang):
 # COPY BUTTON
 # ============================================================
 
-def code_keyboard(code):
+def code_keyboard(code, lang="en"):
 
-    try:
-
-        return InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    TEXT["en"]["copy_code"],
-                    copy_text=CopyTextButton(
-                        text=str(code)
-                    )
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                TEXT[lang]["copy_code"],
+                copy_text=CopyTextButton(
+                    text=str(code)
                 )
-            ]
-        ])
-
-    except Exception:
-
-        return InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "📋 Copy Code",
-                    callback_data=f"copy:{code}"
-                )
-            ]
-        ])
+            )
+        ]
+    ])
 
 
 # ============================================================
