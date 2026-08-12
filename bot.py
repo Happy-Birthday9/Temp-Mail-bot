@@ -52,11 +52,6 @@ MAX_MESSAGES = 10
 
 DHAKA_TZ = ZoneInfo("Asia/Dhaka")
 
-
-# ============================================================
-# LOGGING
-# ============================================================
-
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -69,10 +64,8 @@ logger = logging.getLogger(__name__)
 # MEMORY CACHE
 # ============================================================
 
-# user_id -> set(message ids)
 SEEN_MESSAGES = {}
 
-# user_id -> mailbox token
 KNOWN_MAILBOX = {}
 
 
@@ -127,6 +120,9 @@ TEXT = {
         "refresh":
             "🔄 Refresh",
 
+        "copy_code":
+            "📋 Copy Code",
+
         "checking":
             "🔎 <b>Checking your inbox...</b>",
 
@@ -156,16 +152,8 @@ TEXT = {
             "💬 <b>Message:</b>\n"
             "{body}",
 
-        "verification":
-            "╭━━━━━━━━━━━━━━━━━━╮\n"
-            "      🔐 <b>VERIFICATION CODE</b>\n"
-            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "🔢 <b>Code:</b>\n"
-            "<code>{code}</code>\n\n"
-            "👇 Tap the button below to copy the code.",
-
-        "copy_code":
-            "📋 Copy Code",
+        "code_copied":
+            "✅ Code: <code>{code}</code>",
 
         "language":
             "🌐 <b>Select your preferred language:</b>",
@@ -273,6 +261,9 @@ TEXT = {
         "refresh":
             "🔄 রিফ্রেশ",
 
+        "copy_code":
+            "📋 Code Copy করুন",
+
         "checking":
             "🔎 <b>আপনার Inbox check করা হচ্ছে...</b>",
 
@@ -302,16 +293,8 @@ TEXT = {
             "💬 <b>Message:</b>\n"
             "{body}",
 
-        "verification":
-            "╭━━━━━━━━━━━━━━━━━━╮\n"
-            "      🔐 <b>VERIFICATION CODE</b>\n"
-            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "🔢 <b>Code:</b>\n"
-            "<code>{code}</code>\n\n"
-            "👇 Code Copy করতে নিচের Button চাপুন।",
-
-        "copy_code":
-            "📋 Code Copy করুন",
+        "code_copied":
+            "✅ Code: <code>{code}</code>",
 
         "language":
             "🌐 <b>আপনার পছন্দের ভাষা নির্বাচন করুন:</b>",
@@ -419,6 +402,9 @@ TEXT = {
         "refresh":
             "🔄 Refresh",
 
+        "copy_code":
+            "📋 Copy Code",
+
         "checking":
             "🔎 <b>Aapka Inbox check ho raha hai...</b>",
 
@@ -448,16 +434,8 @@ TEXT = {
             "💬 <b>Message:</b>\n"
             "{body}",
 
-        "verification":
-            "╭━━━━━━━━━━━━━━━━━━╮\n"
-            "      🔐 <b>VERIFICATION CODE</b>\n"
-            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "🔢 <b>Code:</b>\n"
-            "<code>{code}</code>\n\n"
-            "👇 Code copy karne ke liye button dabayein.",
-
-        "copy_code":
-            "📋 Copy Code",
+        "code_copied":
+            "✅ Code: <code>{code}</code>",
 
         "language":
             "🌐 <b>Apni pasand ki language select karein:</b>",
@@ -545,12 +523,12 @@ def language_keyboard():
                 "🇮🇳 Hindi",
                 callback_data="lang_hi"
             )
-        ],
+        ]
     ])
 
 
 # ============================================================
-# MAIN KEYBOARD
+# NORMAL MAIN KEYBOARD
 # ============================================================
 
 def main_keyboard(lang):
@@ -566,40 +544,66 @@ def main_keyboard(lang):
             InlineKeyboardButton(
                 t["inbox"],
                 callback_data="inbox"
-            ),
+            )
         ],
         [
             InlineKeyboardButton(
                 t["refresh"],
                 callback_data="refresh"
-            ),
-        ],
-    ])
-
-
-# ============================================================
-# COPY CODE KEYBOARD
-# ============================================================
-
-def code_keyboard(code, lang):
-
-    """
-    Telegram native Copy button.
-
-    User taps the button -> Telegram copies the
-    code directly to clipboard.
-    """
-
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                TEXT[lang]["copy_code"],
-                copy_text=CopyTextButton(
-                    text=str(code)
-                ),
             )
         ]
     ])
+
+
+# ============================================================
+# EMAIL KEYBOARD
+#
+# CODE থাকলে:
+# Generate | Copy Code
+# Refresh
+#
+# CODE না থাকলে:
+# Generate | Inbox
+# Refresh
+# ============================================================
+
+def email_keyboard(
+    lang,
+    code=None
+):
+
+    t = TEXT[lang]
+
+    if code:
+
+        # IMPORTANT:
+        # CopyTextButton Telegram-এর native copy button।
+        # এতে callback handler লাগবে না।
+
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    t["generate"],
+                    callback_data="generate"
+                ),
+                InlineKeyboardButton(
+                    t["copy_code"],
+                    copy_text=CopyTextButton(
+                        text=str(code)
+                    )
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    t["refresh"],
+                    callback_data="refresh"
+                )
+            ]
+        ])
+
+    # Code না থাকলে normal Inbox button
+
+    return main_keyboard(lang)
 
 
 # ============================================================
@@ -609,11 +613,17 @@ def code_keyboard(code, lang):
 def user_lang(user_id):
 
     try:
-        lang = get_language(user_id)
+
+        lang = get_language(
+            user_id
+        )
+
     except Exception:
+
         lang = None
 
     if lang not in TEXT:
+
         return "en"
 
     return lang
@@ -622,9 +632,12 @@ def user_lang(user_id):
 def safe(value):
 
     if value is None:
+
         return ""
 
-    return html.escape(str(value))
+    return html.escape(
+        str(value)
+    )
 
 
 def is_admin(user_id):
@@ -638,7 +651,9 @@ def is_admin(user_id):
 
 def dhaka_time():
 
-    now = datetime.now(DHAKA_TZ)
+    now = datetime.now(
+        DHAKA_TZ
+    )
 
     return now.strftime(
         "%d %b %Y, %I:%M:%S %p"
@@ -652,13 +667,10 @@ def dhaka_time():
 def extract_code(text):
 
     if not text:
+
         return None
 
     text = str(text)
-
-    # --------------------------------------------------------
-    # Verification / OTP related patterns
-    # --------------------------------------------------------
 
     patterns = [
 
@@ -669,12 +681,6 @@ def extract_code(text):
         r"\D{0,30}(\d{4,8})",
 
         r"(?:login\s*code)"
-        r"\D{0,30}(\d{4,8})",
-
-        r"(?:security\s*code)"
-        r"\D{0,30}(\d{4,8})",
-
-        r"(?:confirmation\s*code)"
         r"\D{0,30}(\d{4,8})",
     ]
 
@@ -687,11 +693,10 @@ def extract_code(text):
         )
 
         if match:
+
             return match.group(1)
 
-    # --------------------------------------------------------
-    # 6 digit code
-    # --------------------------------------------------------
+    # 6 digit
 
     match = re.search(
         r"(?<!\d)\d{6}(?!\d)",
@@ -699,11 +704,10 @@ def extract_code(text):
     )
 
     if match:
+
         return match.group(0)
 
-    # --------------------------------------------------------
-    # 5 digit code
-    # --------------------------------------------------------
+    # 5 digit
 
     match = re.search(
         r"(?<!\d)\d{5}(?!\d)",
@@ -711,11 +715,10 @@ def extract_code(text):
     )
 
     if match:
+
         return match.group(0)
 
-    # --------------------------------------------------------
-    # 4 digit code
-    # --------------------------------------------------------
+    # 4 digit
 
     match = re.search(
         r"(?<!\d)\d{4}(?!\d)",
@@ -723,6 +726,7 @@ def extract_code(text):
     )
 
     if match:
+
         return match.group(0)
 
     return None
@@ -744,6 +748,7 @@ def get_message_id(item):
     for value in possible:
 
         if value is not None:
+
             return str(value)
 
     raw = (
@@ -758,10 +763,6 @@ def get_message_id(item):
         + str(item.get("intro", ""))
         + "|"
         + str(item.get("text", ""))
-        + "|"
-        + str(item.get("body", ""))
-        + "|"
-        + str(item.get("content", ""))
     )
 
     return raw
@@ -836,7 +837,9 @@ async def api_request(
 
                 try:
 
-                    return json.loads(text)
+                    return json.loads(
+                        text
+                    )
 
                 except Exception:
 
@@ -898,29 +901,53 @@ async def get_messages(token):
 def extract_messages(data):
 
     if not data:
+
         return []
 
     if isinstance(data, list):
+
         return data
 
     if not isinstance(data, dict):
+
         return []
 
-    messages = data.get("messages")
+    messages = data.get(
+        "messages"
+    )
 
-    if isinstance(messages, list):
+    if isinstance(
+        messages,
+        list
+    ):
+
         return messages
 
-    nested = data.get("data")
+    nested = data.get(
+        "data"
+    )
 
-    if isinstance(nested, dict):
+    if isinstance(
+        nested,
+        dict
+    ):
 
-        messages = nested.get("messages")
+        messages = nested.get(
+            "messages"
+        )
 
-        if isinstance(messages, list):
+        if isinstance(
+            messages,
+            list
+        ):
+
             return messages
 
-    if isinstance(nested, list):
+    if isinstance(
+        nested,
+        list
+    ):
+
         return nested
 
     return []
@@ -940,7 +967,10 @@ def parse_sender(item):
         or ""
     )
 
-    if isinstance(sender_data, dict):
+    if isinstance(
+        sender_data,
+        dict
+    ):
 
         sender = (
             sender_data.get("address")
@@ -965,7 +995,9 @@ def parse_sender(item):
             or "Unknown"
         )
 
-    return str(sender)
+    return str(
+        sender
+    )
 
 
 # ============================================================
@@ -974,7 +1006,9 @@ def parse_sender(item):
 
 def parse_mail(item):
 
-    sender = parse_sender(item)
+    sender = parse_sender(
+        item
+    )
 
     subject = (
         item.get("subject")
@@ -990,7 +1024,10 @@ def parse_mail(item):
         or ""
     )
 
-    if isinstance(body, dict):
+    if isinstance(
+        body,
+        dict
+    ):
 
         body = (
             body.get("text")
@@ -1010,7 +1047,7 @@ def parse_mail(item):
 # BUILD EMAIL MESSAGE
 # ============================================================
 
-def build_mail_message(
+def build_email_message(
     item,
     lang
 ):
@@ -1021,59 +1058,56 @@ def build_mail_message(
         item
     )
 
-    code = extract_code(body)
-
     # --------------------------------------------------------
-    # CODE FOUND
+    # CODE DETECT
     # --------------------------------------------------------
 
-    if code:
+    code = extract_code(
+        body
+    )
 
-        content = (
-            t["verification"]
-            .format(
-                code=safe(code)
+    # --------------------------------------------------------
+    # IMPORTANT:
+    #
+    # Code থাকলেও Message body hide হবে না।
+    # Original message দেখাবে।
+    # Copy Code button নিচে থাকবে।
+    # --------------------------------------------------------
+
+    content = (
+        t["message_content"]
+        .format(
+            body=safe(
+                body[:3000]
             )
         )
+    )
 
-        # IMPORTANT:
-        # Copy button is attached here.
-        keyboard = code_keyboard(
-            code,
-            lang
+    message_text = (
+        t["new_mail"]
+        .format(
+            sender=safe(
+                sender
+            ),
+            subject=safe(
+                subject
+            ),
+            date=safe(
+                dhaka_time()
+            ),
+            content=content
         )
+    )
 
-    # --------------------------------------------------------
-    # NORMAL EMAIL
-    # --------------------------------------------------------
-
-    else:
-
-        content = (
-            t["message_content"]
-            .format(
-                body=safe(
-                    body[:1500]
-                )
-            )
-        )
-
-        keyboard = None
-
-    message_text = t[
-        "new_mail"
-    ].format(
-        sender=safe(sender),
-        subject=safe(subject),
-        date=safe(
-            dhaka_time()
-        ),
-        content=content
+    keyboard = email_keyboard(
+        lang,
+        code
     )
 
     return (
         message_text,
-        keyboard
+        keyboard,
+        code
     )
 
 
@@ -1088,11 +1122,13 @@ async def send_auto_mail(
     lang
 ):
 
-    message_text, keyboard = (
-        build_mail_message(
-            item,
-            lang
-        )
+    (
+        message_text,
+        keyboard,
+        code
+    ) = build_email_message(
+        item,
+        lang
     )
 
     await bot.send_message(
@@ -1102,9 +1138,24 @@ async def send_auto_mail(
         parse_mode="HTML"
     )
 
+    if code:
+
+        logger.info(
+            "📩 Automatic email with Copy Code button sent -> %s | code=%s",
+            user_id,
+            code
+        )
+
+    else:
+
+        logger.info(
+            "📩 Automatic email sent -> %s",
+            user_id
+        )
+
 
 # ============================================================
-# SEND INBOX EMAIL
+# SEND NORMAL INBOX EMAIL
 # ============================================================
 
 async def send_inbox_mail(
@@ -1114,11 +1165,13 @@ async def send_inbox_mail(
     lang
 ):
 
-    message_text, keyboard = (
-        build_mail_message(
-            item,
-            lang
-        )
+    (
+        message_text,
+        keyboard,
+        code
+    ) = build_email_message(
+        item,
+        lang
     )
 
     await bot.send_message(
@@ -1200,14 +1253,17 @@ async def generate_new(
         token
     )
 
-    # New mailbox = clear old cache
+    # নতুন mailbox হলে cache clear
+
     SEEN_MESSAGES[user_id] = set()
 
     KNOWN_MAILBOX[user_id] = token
 
     await loading.edit_text(
         t["created"].format(
-            email=safe(email)
+            email=safe(
+                email
+            )
         ),
         reply_markup=main_keyboard(
             lang
@@ -1230,6 +1286,7 @@ async def start(
     user = update.effective_user
 
     if not user:
+
         return
 
     save_user(
@@ -1242,6 +1299,7 @@ async def start(
     )
 
     # First time
+
     if not lang:
 
         await update.message.reply_text(
@@ -1287,7 +1345,7 @@ async def start(
 
 
 # ============================================================
-# SHOW INBOX
+# INBOX
 # ============================================================
 
 async def show_inbox(
@@ -1327,9 +1385,6 @@ async def show_inbox(
 
         await loading.edit_text(
             t["api_error"],
-            reply_markup=main_keyboard(
-                lang
-            ),
             parse_mode="HTML"
         )
 
@@ -1356,17 +1411,14 @@ async def show_inbox(
         await loading.delete()
 
     except Exception:
+
         pass
 
     # Latest first
+
     messages = list(
         reversed(messages)
     )
-
-    # --------------------------------------------------------
-    # Send ALL inbox messages
-    # Each code message gets Copy Code button.
-    # --------------------------------------------------------
 
     for item in messages[:MAX_MESSAGES]:
 
@@ -1387,25 +1439,20 @@ async def show_inbox(
             )
 
     # --------------------------------------------------------
-    # Inbox footer
-    # 3 buttons:
-    # Generate New | Inbox
-    # Refresh
+    # IMPORTANT:
+    #
+    # এখানে আর আলাদা
+    #
+    # ━━━━━━━━━━━━━━━━━━
+    # 📥 Inbox
+    # ━━━━━━━━━━━━━━━━━━
+    #
+    # পাঠানো হবে না।
     # --------------------------------------------------------
-
-    await message.reply_text(
-        "━━━━━━━━━━━━━━━━━━\n"
-        "📥 <b>Inbox</b>\n"
-        "━━━━━━━━━━━━━━━━━━",
-        reply_markup=main_keyboard(
-            lang
-        ),
-        parse_mode="HTML"
-    )
 
 
 # ============================================================
-# REFRESH COMMAND
+# REFRESH
 # ============================================================
 
 async def refresh_command(
@@ -1449,7 +1496,7 @@ async def inbox_command(
 
 
 # ============================================================
-# LANGUAGE COMMAND
+# LANGUAGE
 # ============================================================
 
 async def language_command(
@@ -1549,9 +1596,11 @@ async def stats_command(
                 )
 
                 if mailbox:
+
                     total_mailboxes += 1
 
             except Exception:
+
                 continue
 
     except Exception as error:
@@ -1593,7 +1642,7 @@ async def admin_only(update):
 
 
 # ============================================================
-# ADMIN COMMAND
+# ADMIN
 # ============================================================
 
 async def admin_command(
@@ -1718,6 +1767,7 @@ async def callback_handler(
         )
 
         if lang not in TEXT:
+
             lang = "en"
 
         await query.answer()
@@ -1735,6 +1785,7 @@ async def callback_handler(
             )
 
         except Exception:
+
             pass
 
         await generate_new(
@@ -1805,14 +1856,6 @@ async def callback_handler(
 
         return
 
-    # ========================================================
-    # COPY BUTTON
-    #
-    # IMPORTANT:
-    # Native CopyTextButton does NOT send callback_data.
-    # So there is nothing to handle here.
-    # ========================================================
-
     await query.answer()
 
 
@@ -1846,6 +1889,7 @@ async def auto_inbox_job(
             )
 
             if not mailbox:
+
                 continue
 
             token = mailbox.get(
@@ -1853,6 +1897,7 @@ async def auto_inbox_job(
             )
 
             if not token:
+
                 continue
 
             # ------------------------------------------------
@@ -1880,6 +1925,7 @@ async def auto_inbox_job(
             )
 
             if not data:
+
                 continue
 
             messages = extract_messages(
@@ -1887,6 +1933,7 @@ async def auto_inbox_job(
             )
 
             if not messages:
+
                 continue
 
             # ------------------------------------------------
@@ -1902,9 +1949,7 @@ async def auto_inbox_job(
                 user_id
             )
 
-            # ------------------------------------------------
             # Oldest first
-            # ------------------------------------------------
 
             for item in messages:
 
@@ -1913,35 +1958,25 @@ async def auto_inbox_job(
                 )
 
                 if not message_id:
+
                     continue
 
                 if message_id in seen:
+
                     continue
 
-                try:
+                # Mark before sending
+                seen.add(
+                    message_id
+                )
 
-                    # ------------------------------------------------
-                    # SEND FIRST
-                    # ------------------------------------------------
+                try:
 
                     await send_auto_mail(
                         context.bot,
                         user_id,
                         item,
                         lang
-                    )
-
-                    # ------------------------------------------------
-                    # Mark seen only after successful send
-                    # ------------------------------------------------
-
-                    seen.add(
-                        message_id
-                    )
-
-                    logger.info(
-                        "📩 New email sent automatically -> %s",
-                        user_id
                     )
 
                 except Exception as error:
@@ -1972,7 +2007,6 @@ async def auto_inbox_job(
                 error
             )
 
-        # API load কমানোর জন্য
         await asyncio.sleep(
             0.05
         )
@@ -2032,15 +2066,9 @@ async def post_init(
 
 def main():
 
-    # --------------------------------------------------------
     # Database initialize
-    # --------------------------------------------------------
 
     init_db()
-
-    # --------------------------------------------------------
-    # Application
-    # --------------------------------------------------------
 
     application = (
         Application.builder()
@@ -2145,10 +2173,6 @@ def main():
         error_handler
     )
 
-    # ========================================================
-    # START
-    # ========================================================
-
     print(
         "🤖 Temp Mail Bot is running..."
     )
@@ -2167,4 +2191,5 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
+
     main()
