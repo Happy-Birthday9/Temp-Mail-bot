@@ -1,196 +1,99 @@
 # ============================================================
 # reward.py
-# TEMP MAIL TELEGRAM BOT - REWARD SYSTEM
+# TEMP MAIL BOT - REWARD / REFERRAL SYSTEM
 # ============================================================
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
-from database import (
-    add_email_reward_once,
-    add_referral_once,
-    get_balance,
-    get_referrer,
-)
-
-
-# ============================================================
-# REWARD AMOUNTS
-# ============================================================
-
-EMAIL_REWARD = Decimal("0.00130")
+# Reward amounts
 REFERRAL_REWARD = Decimal("0.00158")
-
-# Names used directly by bot.py
-EMAIL_CODE_REWARD = EMAIL_REWARD
-EMAIL_REWARD_AMOUNT = float(EMAIL_REWARD)
-REFERRAL_REWARD_AMOUNT = float(REFERRAL_REWARD)
+EMAIL_CODE_REWARD = Decimal("0.00130")
 
 
-# ============================================================
-# FORMAT
-# ============================================================
+def money(value):
+    """Safely convert a value to Decimal."""
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal("0")
+
+
+def referral_reward_amount():
+    """Return reward amount for one successful referral."""
+    return REFERRAL_REWARD
+
+
+def email_code_reward_amount():
+    """Return reward amount for one unique email/code reward."""
+    return EMAIL_CODE_REWARD
+
+
+def calculate_referral_reward(count=1):
+    """Calculate total referral reward."""
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        count = 0
+
+    if count < 0:
+        count = 0
+
+    return REFERRAL_REWARD * count
+
+
+def calculate_email_reward(count=1):
+    """Calculate total email-code reward."""
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        count = 0
+
+    if count < 0:
+        count = 0
+
+    return EMAIL_CODE_REWARD * count
+
 
 def format_reward(amount):
-    """
-    Format reward amount for Telegram messages.
-
-    Example:
-        0.00130 -> $0.00130
-    """
-    try:
-        return f"${Decimal(str(amount)):.5f}"
-    except Exception:
-        return "$0.00000"
+    """Format reward/balance nicely for Telegram."""
+    amount = money(amount)
+    return f"{amount:.5f}"
 
 
-def format_balance(user_id):
-    balance = Decimal(str(get_balance(int(user_id))))
-    return f"${balance:.5f}"
-
-
-# ============================================================
-# EMAIL / CODE REWARD
-# ============================================================
-
-def reward_email_code(user_id, reward_key):
-    """
-    Give reward only once for the same user + reward_key.
-    """
-    user_id = int(user_id)
-
-    if not reward_key:
-        return {
-            "success": False,
-            "added": False,
-            "amount": 0.0,
-            "balance": get_balance(user_id),
-        }
-
-    reward_key = str(reward_key).strip()
-
-    if not reward_key:
-        return {
-            "success": False,
-            "added": False,
-            "amount": 0.0,
-            "balance": get_balance(user_id),
-        }
-
-    added, balance = add_email_reward_once(
-        user_id=user_id,
-        reward_key=reward_key,
-        amount=EMAIL_REWARD,
-    )
+def reward_summary(referrals=0, emails=0):
+    """Return a simple reward summary."""
+    referral_total = calculate_referral_reward(referrals)
+    email_total = calculate_email_reward(emails)
+    total = referral_total + email_total
 
     return {
-        "success": True,
-        "added": added,
-        "amount": float(EMAIL_REWARD) if added else 0.0,
-        "balance": balance,
+        "referrals": int(referrals),
+        "emails": int(emails),
+        "referral_reward": referral_total,
+        "email_reward": email_total,
+        "total": total,
+        "formatted_referral_reward": format_reward(referral_total),
+        "formatted_email_reward": format_reward(email_total),
+        "formatted_total": format_reward(total),
     }
 
 
-# ============================================================
-# REFERRAL REWARD
-# ============================================================
+# ------------------------------------------------------------
+# IMPORTANT:
+# database.py should be responsible for actually saving
+# rewards to SQLite.
+#
+# This file only keeps reward rules/calculations in one place.
+# ------------------------------------------------------------
 
-def reward_referral(referrer_id, referred_id):
-    """
-    Give referral reward only once for a referred user.
-    """
-    referrer_id = int(referrer_id)
-    referred_id = int(referred_id)
-
-    if referrer_id == referred_id:
-        return {
-            "success": False,
-            "added": False,
-            "amount": 0.0,
-            "balance": get_balance(referrer_id),
-        }
-
-    added, balance = add_referral_once(
-        referrer_id=referrer_id,
-        referred_id=referred_id,
-        amount=REFERRAL_REWARD,
-    )
-
-    return {
-        "success": True,
-        "added": added,
-        "amount": float(REFERRAL_REWARD) if added else 0.0,
-        "balance": balance,
-    }
-
-
-# ============================================================
-# AUTO REFERRAL REWARD
-# ============================================================
-
-def process_referral(user_id):
-    """
-    If the user has a referrer, give the referrer
-    the referral reward once.
-    """
-    user_id = int(user_id)
-
-    referrer_id = get_referrer(user_id)
-
-    if not referrer_id:
-        return None
-
-    return reward_referral(
-        referrer_id=referrer_id,
-        referred_id=user_id,
-    )
-
-
-# ============================================================
-# BALANCE
-# ============================================================
-
-def get_user_balance(user_id):
-    return get_balance(int(user_id))
-
-
-# ============================================================
-# EMAIL REWARD MESSAGE
-# ============================================================
-
-def email_reward_message(user_id, reward_key):
-    result = reward_email_code(
-        user_id=user_id,
-        reward_key=reward_key,
-    )
-
-    if result["added"]:
-        return (
-            f"💰 <b>You earned:</b> "
-            f"{format_reward(result['amount'])}"
-        )
-
-    return (
-        "ℹ️ <b>Reward already received for this code.</b>"
-    )
-
-
-# ============================================================
-# REFERRAL REWARD MESSAGE
-# ============================================================
-
-def referral_reward_message(referrer_id, referred_id):
-    result = reward_referral(
-        referrer_id=referrer_id,
-        referred_id=referred_id,
-    )
-
-    if result["added"]:
-        return (
-            "🎉 <b>Referral Successful!</b>\n\n"
-            f"💰 You earned: "
-            f"{format_reward(result['amount'])}\n"
-            f"💳 Balance: "
-            f"{format_reward(result['balance'])}"
-        )
-
-    return None
+__all__ = [
+    "REFERRAL_REWARD",
+    "EMAIL_CODE_REWARD",
+    "money",
+    "referral_reward_amount",
+    "email_code_reward_amount",
+    "calculate_referral_reward",
+    "calculate_email_reward",
+    "format_reward",
+    "reward_summary",
+        ]
