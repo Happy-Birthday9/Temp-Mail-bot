@@ -1,179 +1,126 @@
 # ============================================================
 # database.py
-# TEMP MAIL TELEGRAM BOT DATABASE
+# TEMP MAIL TELEGRAM BOT - SQLITE DATABASE
 # ============================================================
 
 import sqlite3
-import threading
 from decimal import Decimal
+from pathlib import Path
+from threading import Lock
+
+# Keep database file in the same folder as this file.
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = BASE_DIR / "temp_mail.db"
+
+_db_lock = Lock()
 
 
 # ============================================================
-# SETTINGS
-# ============================================================
-
-DB_NAME = "temp_mail_bot.db"
-
-_db_lock = threading.RLock()
-
-
-# ============================================================
-# DATABASE CONNECTION
+# CONNECTION
 # ============================================================
 
 def get_connection():
     conn = sqlite3.connect(
-        DB_NAME,
+        str(DB_PATH),
         timeout=30,
         check_same_thread=False,
     )
-
     conn.row_factory = sqlite3.Row
-
-    # Foreign key support
     conn.execute("PRAGMA foreign_keys = ON")
-
-    # Better SQLite performance
     conn.execute("PRAGMA journal_mode = WAL")
-
     return conn
 
 
 # ============================================================
-# INIT DATABASE
+# INIT
 # ============================================================
 
 def init_db():
     with _db_lock:
         conn = get_connection()
-
         try:
-            cursor = conn.cursor()
-
-            # ------------------------------------------------
-            # USERS
-            # ------------------------------------------------
-
-            cursor.execute("""
+            conn.executescript(
+                """
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
                     username TEXT,
-                    language TEXT DEFAULT NULL,
+                    language TEXT,
                     balance TEXT NOT NULL DEFAULT '0',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+                    referrer_id INTEGER,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
 
-            # ------------------------------------------------
-            # MAILBOXES
-            # ------------------------------------------------
-
-            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS mailboxes (
                     user_id INTEGER PRIMARY KEY,
                     email TEXT NOT NULL,
                     token TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id)
-                    REFERENCES users(user_id)
-                    ON DELETE CASCADE
-                )
-            """)
+                        REFERENCES users(user_id)
+                        ON DELETE CASCADE
+                );
 
-            # ------------------------------------------------
-            # EMAIL REWARDS
-            #
-            # One message_key can only reward once for a user.
-            # ------------------------------------------------
-
-            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS email_rewards (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-
                     user_id INTEGER NOT NULL,
-                    message_key TEXT NOT NULL,
+                    reward_key TEXT NOT NULL,
                     code TEXT,
                     amount TEXT NOT NULL,
-
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-                    UNIQUE(user_id, message_key),
-
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, reward_key),
                     FOREIGN KEY (user_id)
-                    REFERENCES users(user_id)
-                    ON DELETE CASCADE
-                )
-            """)
+                        REFERENCES users(user_id)
+                        ON DELETE CASCADE
+                );
 
-            # ------------------------------------------------
-            # REFERRALS
-            #
-            # A referred user can only be rewarded once.
-            # ------------------------------------------------
-
-            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS referrals (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-
                     referrer_id INTEGER NOT NULL,
                     referred_id INTEGER NOT NULL,
                     amount TEXT NOT NULL,
-
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(referred_id),
-
                     FOREIGN KEY (referrer_id)
-                    REFERENCES users(user_id)
-                    ON DELETE CASCADE,
-
+                        REFERENCES users(user_id)
+                        ON DELETE CASCADE,
                     FOREIGN KEY (referred_id)
-                    REFERENCES users(user_id)
-                    ON DELETE CASCADE
-                )
-            """)
+                        REFERENCES users(user_id)
+                        ON DELETE CASCADE
+                );
 
-            # ------------------------------------------------
-            # WITHDRAWALS
-            # ------------------------------------------------
-
-            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS withdrawals (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-
                     user_id INTEGER NOT NULL,
                     binance_id TEXT NOT NULL,
                     amount TEXT NOT NULL,
-
                     status TEXT NOT NULL DEFAULT 'pending',
-
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id)
-                    REFERENCES users(user_id)
-                    ON DELETE CASCADE
+                        REFERENCES users(user_id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_email_rewards_user
+                    ON email_rewards(user_id);
+
+                CREATE INDEX IF NOT EXISTS idx_referrals_referrer
+                    ON referrals(referrer_id);
+
+                CREATE INDEX IF NOT EXISTS idx_withdrawals_user
+                    ON withdrawals(user_id);
+                """
+            )
+
+            # Small migration for databases created by older versions.
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(email_rewards)")
+            }
+
+            if "code" not in columns:
+                conn.execute(
+                    "ALTER TABLE email_rewards ADD COLUMN code TEXT"
                 )
-            """)
-
-            # ------------------------------------------------
-            # REFERRER
-            #
-            # Stores who referred each user.
-            # ------------------------------------------------
-
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS user_referrers (
-                    user_id INTEGER PRIMARY KEY,
-                    referrer_id INTEGER NOT NULL,
-
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-                    FOREIGN KEY (user_id)
-                    REFERENCES users(user_id)
-                    ON DELETE CASCADE
-                )
-            """)
 
             conn.commit()
 
@@ -182,58 +129,75 @@ def init_db():
 
 
 # ============================================================
-# USER
+# HELPERS
+# ============================================================
+
+def _ensure_user(conn, user_id, username=None):
+    user_id = int(user_id)
+
+    row = conn.execute(
+        "SELECT user_id FROM users WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+
+    if row is None:
+        conn.execute(
+            """
+            INSERT INTO users (user_id, username, language, balance)
+            VALUES (?, ?, NULL, '0')
+            """,
+            (user_id, username),
+        )
+    elif username is not None:
+        conn.execute(
+            """
+            UPDATE users
+            SET username = ?
+            WHERE user_id = ?
+            """,
+            (username, user_id),
+        )
+
+
+def _to_decimal(value):
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return Decimal("0")
+
+
+def _balance(conn, user_id):
+    row = conn.execute(
+        "SELECT balance FROM users WHERE user_id = ?",
+        (int(user_id),),
+    ).fetchone()
+
+    if not row:
+        return Decimal("0")
+
+    return _to_decimal(row["balance"])
+
+
+# ============================================================
+# USERS
 # ============================================================
 
 def save_user(user_id, username=None):
-    """
-    Create user if not exists.
-    If user already exists, update username.
-    """
-
     with _db_lock:
         conn = get_connection()
-
         try:
-            conn.execute(
-                """
-                INSERT INTO users (
-                    user_id,
-                    username
-                )
-                VALUES (?, ?)
-
-                ON CONFLICT(user_id)
-                DO UPDATE SET
-                    username = excluded.username
-                """,
-                (
-                    int(user_id),
-                    username,
-                ),
-            )
-
+            _ensure_user(conn, user_id, username)
             conn.commit()
-
         finally:
             conn.close()
 
-
-# ============================================================
-# LANGUAGE
-# ============================================================
 
 def get_language(user_id):
     with _db_lock:
         conn = get_connection()
-
         try:
             row = conn.execute(
-                """
-                SELECT language
-                FROM users
-                WHERE user_id = ?
-                """,
+                "SELECT language FROM users WHERE user_id = ?",
                 (int(user_id),),
             ).fetchone()
 
@@ -241,34 +205,68 @@ def get_language(user_id):
                 return None
 
             return row["language"]
-
         finally:
             conn.close()
 
 
 def set_language(user_id, language):
-    save_user(user_id)
-
     with _db_lock:
         conn = get_connection()
-
         try:
+            _ensure_user(conn, user_id)
             conn.execute(
                 """
                 UPDATE users
                 SET language = ?
                 WHERE user_id = ?
                 """,
-                (
-                    language,
-                    int(user_id),
-                ),
+                (str(language), int(user_id)),
             )
-
             conn.commit()
-
         finally:
             conn.close()
+
+
+def get_all_users():
+    with _db_lock:
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT user_id FROM users ORDER BY user_id"
+            ).fetchall()
+
+            return [int(row["user_id"]) for row in rows]
+        finally:
+            conn.close()
+
+
+# ============================================================
+# BALANCE
+# ============================================================
+
+def get_balance(user_id):
+    with _db_lock:
+        conn = get_connection()
+        try:
+            return _balance(conn, user_id)
+        finally:
+            conn.close()
+
+
+def _add_balance(conn, user_id, amount):
+    current = _balance(conn, user_id)
+    new_balance = current + _to_decimal(amount)
+
+    conn.execute(
+        """
+        UPDATE users
+        SET balance = ?
+        WHERE user_id = ?
+        """,
+        (str(new_balance), int(user_id)),
+    )
+
+    return new_balance
 
 
 # ============================================================
@@ -276,25 +274,15 @@ def set_language(user_id, language):
 # ============================================================
 
 def save_mailbox(user_id, email, token):
-    """
-    Save/update the current mailbox for user.
-    """
-
-    save_user(user_id)
-
     with _db_lock:
         conn = get_connection()
-
         try:
+            _ensure_user(conn, user_id)
+
             conn.execute(
                 """
-                INSERT INTO mailboxes (
-                    user_id,
-                    email,
-                    token
-                )
+                INSERT INTO mailboxes (user_id, email, token)
                 VALUES (?, ?, ?)
-
                 ON CONFLICT(user_id)
                 DO UPDATE SET
                     email = excluded.email,
@@ -317,15 +305,10 @@ def save_mailbox(user_id, email, token):
 def get_mailbox(user_id):
     with _db_lock:
         conn = get_connection()
-
         try:
             row = conn.execute(
                 """
-                SELECT
-                    user_id,
-                    email,
-                    token,
-                    created_at
+                SELECT email, token, created_at
                 FROM mailboxes
                 WHERE user_id = ?
                 """,
@@ -335,266 +318,108 @@ def get_mailbox(user_id):
             if not row:
                 return None
 
-            return dict(row)
+            return {
+                "email": row["email"],
+                "token": row["token"],
+                "created_at": row["created_at"],
+            }
 
         finally:
             conn.close()
 
 
 # ============================================================
-# ALL USERS
-# ============================================================
-
-def get_all_users():
-    with _db_lock:
-        conn = get_connection()
-
-        try:
-            rows = conn.execute(
-                """
-                SELECT user_id
-                FROM users
-                ORDER BY user_id
-                """
-            ).fetchall()
-
-            return [
-                int(row["user_id"])
-                for row in rows
-            ]
-
-        finally:
-            conn.close()
-
-
-# ============================================================
-# BALANCE HELPERS
-# ============================================================
-
-def get_balance(user_id):
-    save_user(user_id)
-
-    with _db_lock:
-        conn = get_connection()
-
-        try:
-            row = conn.execute(
-                """
-                SELECT balance
-                FROM users
-                WHERE user_id = ?
-                """,
-                (int(user_id),),
-            ).fetchone()
-
-            if not row:
-                return Decimal("0")
-
-            try:
-                return Decimal(str(row["balance"]))
-
-            except Exception:
-                return Decimal("0")
-
-        finally:
-            conn.close()
-
-
-def _get_balance_decimal(conn, user_id):
-    row = conn.execute(
-        """
-        SELECT balance
-        FROM users
-        WHERE user_id = ?
-        """,
-        (int(user_id),),
-    ).fetchone()
-
-    if not row:
-        return Decimal("0")
-
-    try:
-        return Decimal(str(row["balance"]))
-
-    except Exception:
-        return Decimal("0")
-
-
-def _set_balance(conn, user_id, amount):
-    conn.execute(
-        """
-        UPDATE users
-        SET balance = ?
-        WHERE user_id = ?
-        """,
-        (
-            str(Decimal(amount)),
-            int(user_id),
-        ),
-    )
-
-
-def add_balance(user_id, amount):
-    """
-    Generic balance addition.
-    """
-
-    save_user(user_id)
-
-    amount = Decimal(str(amount))
-
-    with _db_lock:
-        conn = get_connection()
-
-        try:
-            current = _get_balance_decimal(
-                conn,
-                user_id,
-            )
-
-            new_balance = current + amount
-
-            _set_balance(
-                conn,
-                user_id,
-                new_balance,
-            )
-
-            conn.commit()
-
-            return new_balance
-
-        finally:
-            conn.close()
-
-
-# ============================================================
-# EMAIL CODE REWARD
+# EMAIL / CODE REWARD
 # ============================================================
 
 def add_email_reward_once(
     user_id,
-    message_key,
-    code,
-    amount,
+    reward_key=None,
+    code=None,
+    amount=0,
+    message_key=None,
 ):
     """
-    Add email verification-code reward ONLY ONCE.
+    Add an email/code reward only once per user + reward_key.
 
-    If the same user + message_key already received reward,
-    nothing is added.
+    Supports both:
+        add_email_reward_once(user_id, reward_key, amount)
+    and:
+        add_email_reward_once(
+            user_id=user_id,
+            message_key=message_key,
+            code=code,
+            amount=amount,
+        )
 
     Returns:
-        (added, new_balance)
+        (added: bool, new_balance: Decimal)
     """
 
-    save_user(user_id)
+    user_id = int(user_id)
 
-    amount = Decimal(str(amount))
+    if reward_key is None:
+        reward_key = message_key
 
-    message_key = str(message_key)
+    if not reward_key:
+        return False, get_balance(user_id)
+
+    reward_key = str(reward_key).strip()
 
     with _db_lock:
         conn = get_connection()
-
         try:
-            # ------------------------------------------------
-            # Check duplicate first
-            # ------------------------------------------------
+            _ensure_user(conn, user_id)
 
-            existing = conn.execute(
+            exists = conn.execute(
                 """
                 SELECT id
                 FROM email_rewards
-                WHERE user_id = ?
-                  AND message_key = ?
-                LIMIT 1
+                WHERE user_id = ? AND reward_key = ?
                 """,
-                (
-                    int(user_id),
-                    message_key,
-                ),
+                (user_id, reward_key),
             ).fetchone()
 
-            if existing:
-                current = _get_balance_decimal(
-                    conn,
+            if exists:
+                return False, _balance(conn, user_id)
+
+            reward_amount = _to_decimal(amount)
+
+            conn.execute(
+                """
+                INSERT INTO email_rewards
+                    (user_id, reward_key, code, amount)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
                     user_id,
-                )
-
-                return False, current
-
-            # ------------------------------------------------
-            # Current balance
-            # ------------------------------------------------
-
-            current = _get_balance_decimal(
-                conn,
-                user_id,
+                    reward_key,
+                    None if code is None else str(code),
+                    str(reward_amount),
+                ),
             )
 
-            new_balance = current + amount
-
-            # ------------------------------------------------
-            # Insert reward record
-            # ------------------------------------------------
-
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO email_rewards (
-                        user_id,
-                        message_key,
-                        code,
-                        amount
-                    )
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (
-                        int(user_id),
-                        message_key,
-                        str(code),
-                        str(amount),
-                    ),
-                )
-
-            except sqlite3.IntegrityError:
-                # Another request inserted it first.
-                current = _get_balance_decimal(
-                    conn,
-                    user_id,
-                )
-
-                conn.rollback()
-
-                return False, current
-
-            # ------------------------------------------------
-            # Add balance
-            # ------------------------------------------------
-
-            _set_balance(
+            new_balance = _add_balance(
                 conn,
                 user_id,
-                new_balance,
+                reward_amount,
             )
 
             conn.commit()
 
             return True, new_balance
 
+        except Exception:
+            conn.rollback()
+            raise
+
         finally:
             conn.close()
 
 
-# ============================================================
-# EMAIL REWARD COUNT
-# ============================================================
-
 def get_reward_count(user_id):
     with _db_lock:
         conn = get_connection()
-
         try:
             row = conn.execute(
                 """
@@ -605,28 +430,17 @@ def get_reward_count(user_id):
                 (int(user_id),),
             ).fetchone()
 
-            return int(row["total"] or 0)
+            return int(row["total"] if row else 0)
 
         finally:
             conn.close()
 
 
 # ============================================================
-# REFERRER
+# REFERRAL
 # ============================================================
 
 def set_referrer(user_id, referrer_id):
-    """
-    Set referrer only once.
-
-    Returns:
-        True  -> referrer successfully saved
-        False -> already has referrer / invalid
-    """
-
-    save_user(user_id)
-    save_user(referrer_id)
-
     user_id = int(user_id)
     referrer_id = int(referrer_id)
 
@@ -635,45 +449,36 @@ def set_referrer(user_id, referrer_id):
 
     with _db_lock:
         conn = get_connection()
-
         try:
-            existing = conn.execute(
+            _ensure_user(conn, user_id)
+            _ensure_user(conn, referrer_id)
+
+            row = conn.execute(
                 """
                 SELECT referrer_id
-                FROM user_referrers
+                FROM users
                 WHERE user_id = ?
                 """,
                 (user_id,),
             ).fetchone()
 
-            if existing:
+            if not row:
                 return False
 
-            # ------------------------------------------------
-            # Save only once
-            # ------------------------------------------------
-
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO user_referrers (
-                        user_id,
-                        referrer_id
-                    )
-                    VALUES (?, ?)
-                    """,
-                    (
-                        user_id,
-                        referrer_id,
-                    ),
-                )
-
-            except sqlite3.IntegrityError:
-                conn.rollback()
+            # A referrer can only be set once.
+            if row["referrer_id"] is not None:
                 return False
+
+            conn.execute(
+                """
+                UPDATE users
+                SET referrer_id = ?
+                WHERE user_id = ?
+                """,
+                (referrer_id, user_id),
+            )
 
             conn.commit()
-
             return True
 
         finally:
@@ -683,18 +488,17 @@ def set_referrer(user_id, referrer_id):
 def get_referrer(user_id):
     with _db_lock:
         conn = get_connection()
-
         try:
             row = conn.execute(
                 """
                 SELECT referrer_id
-                FROM user_referrers
+                FROM users
                 WHERE user_id = ?
                 """,
                 (int(user_id),),
             ).fetchone()
 
-            if not row:
+            if not row or row["referrer_id"] is None:
                 return None
 
             return int(row["referrer_id"])
@@ -703,126 +507,9 @@ def get_referrer(user_id):
             conn.close()
 
 
-# ============================================================
-# REFERRAL REWARD
-# ============================================================
-
-def add_referral_once(
-    referrer_id,
-    referred_id,
-    amount,
-):
-    """
-    Add referral reward only once.
-
-    The same referred user can never generate
-    referral reward twice.
-
-    Returns:
-        (added, new_balance)
-    """
-
-    save_user(referrer_id)
-    save_user(referred_id)
-
-    referrer_id = int(referrer_id)
-    referred_id = int(referred_id)
-
-    amount = Decimal(str(amount))
-
-    if referrer_id == referred_id:
-        return False, get_balance(referrer_id)
-
-    with _db_lock:
-        conn = get_connection()
-
-        try:
-            # ------------------------------------------------
-            # Check existing referral
-            # ------------------------------------------------
-
-            existing = conn.execute(
-                """
-                SELECT id
-                FROM referrals
-                WHERE referred_id = ?
-                LIMIT 1
-                """,
-                (referred_id,),
-            ).fetchone()
-
-            if existing:
-                current = _get_balance_decimal(
-                    conn,
-                    referrer_id,
-                )
-
-                return False, current
-
-            current = _get_balance_decimal(
-                conn,
-                referrer_id,
-            )
-
-            new_balance = current + amount
-
-            # ------------------------------------------------
-            # Insert referral
-            # ------------------------------------------------
-
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO referrals (
-                        referrer_id,
-                        referred_id,
-                        amount
-                    )
-                    VALUES (?, ?, ?)
-                    """,
-                    (
-                        referrer_id,
-                        referred_id,
-                        str(amount),
-                    ),
-                )
-
-            except sqlite3.IntegrityError:
-                current = _get_balance_decimal(
-                    conn,
-                    referrer_id,
-                )
-
-                conn.rollback()
-
-                return False, current
-
-            # ------------------------------------------------
-            # Add reward
-            # ------------------------------------------------
-
-            _set_balance(
-                conn,
-                referrer_id,
-                new_balance,
-            )
-
-            conn.commit()
-
-            return True, new_balance
-
-        finally:
-            conn.close()
-
-
-# ============================================================
-# REFERRAL COUNT
-# ============================================================
-
 def get_referral_count(user_id):
     with _db_lock:
         conn = get_connection()
-
         try:
             row = conn.execute(
                 """
@@ -833,7 +520,76 @@ def get_referral_count(user_id):
                 (int(user_id),),
             ).fetchone()
 
-            return int(row["total"] or 0)
+            return int(row["total"] if row else 0)
+
+        finally:
+            conn.close()
+
+
+def add_referral_once(
+    referrer_id,
+    referred_id,
+    amount,
+):
+    """
+    Give referral reward exactly once for a referred user.
+
+    Returns:
+        (added: bool, new_balance: Decimal)
+    """
+
+    referrer_id = int(referrer_id)
+    referred_id = int(referred_id)
+
+    if referrer_id == referred_id:
+        return False, get_balance(referrer_id)
+
+    with _db_lock:
+        conn = get_connection()
+        try:
+            _ensure_user(conn, referrer_id)
+            _ensure_user(conn, referred_id)
+
+            exists = conn.execute(
+                """
+                SELECT id
+                FROM referrals
+                WHERE referred_id = ?
+                """,
+                (referred_id,),
+            ).fetchone()
+
+            if exists:
+                return False, _balance(conn, referrer_id)
+
+            reward_amount = _to_decimal(amount)
+
+            conn.execute(
+                """
+                INSERT INTO referrals
+                    (referrer_id, referred_id, amount)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    referrer_id,
+                    referred_id,
+                    str(reward_amount),
+                ),
+            )
+
+            new_balance = _add_balance(
+                conn,
+                referrer_id,
+                reward_amount,
+            )
+
+            conn.commit()
+
+            return True, new_balance
+
+        except Exception:
+            conn.rollback()
+            raise
 
         finally:
             conn.close()
@@ -849,130 +605,79 @@ def create_withdrawal(
     amount,
 ):
     """
-    Create withdrawal and deduct balance ATOMICALLY.
-
-    Important:
-    - Minimum withdrawal is $1.00
-    - Balance must be sufficient
-    - Balance is deducted before transaction commits
-    - If anything fails, balance remains unchanged
+    Atomically checks balance, creates a withdrawal request,
+    and deducts the requested amount.
 
     Returns:
-        withdrawal_id
-        OR None on failure
+        withdrawal ID on success
+        None on insufficient balance / invalid request
     """
 
-    save_user(user_id)
-
     user_id = int(user_id)
-
-    amount = Decimal(str(amount))
-
-    if amount < Decimal("1.00"):
-        return None
+    amount = _to_decimal(amount)
 
     if amount <= Decimal("0"):
         return None
 
-    binance_id = str(binance_id).strip()
-
     if not binance_id:
-        return None
-
-    if len(binance_id) > 100:
         return None
 
     with _db_lock:
         conn = get_connection()
-
         try:
-            # ------------------------------------------------
-            # BEGIN TRANSACTION
-            # ------------------------------------------------
+            _ensure_user(conn, user_id)
 
-            conn.execute("BEGIN IMMEDIATE")
+            current = _balance(conn, user_id)
 
-            current = _get_balance_decimal(
-                conn,
-                user_id,
-            )
-
-            # ------------------------------------------------
-            # Insufficient balance
-            # ------------------------------------------------
-
-            if current < amount:
-                conn.rollback()
+            if amount > current:
                 return None
-
-            # ------------------------------------------------
-            # Calculate remaining balance
-            # ------------------------------------------------
-
-            remaining = current - amount
-
-            # ------------------------------------------------
-            # Deduct balance FIRST
-            # ------------------------------------------------
-
-            _set_balance(
-                conn,
-                user_id,
-                remaining,
-            )
-
-            # ------------------------------------------------
-            # Create withdrawal record
-            # ------------------------------------------------
 
             cursor = conn.execute(
                 """
-                INSERT INTO withdrawals (
-                    user_id,
-                    binance_id,
-                    amount,
-                    status
-                )
-                VALUES (?, ?, ?, ?)
+                INSERT INTO withdrawals
+                    (user_id, binance_id, amount, status)
+                VALUES (?, ?, ?, 'pending')
                 """,
                 (
                     user_id,
-                    binance_id,
+                    str(binance_id).strip(),
                     str(amount),
-                    "pending",
                 ),
             )
 
-            withdrawal_id = cursor.lastrowid
+            new_balance = current - amount
 
-            # ------------------------------------------------
-            # Commit everything together
-            # ------------------------------------------------
+            conn.execute(
+                """
+                UPDATE users
+                SET balance = ?
+                WHERE user_id = ?
+                """,
+                (
+                    str(new_balance),
+                    user_id,
+                ),
+            )
 
             conn.commit()
 
-            return int(withdrawal_id)
+            return int(cursor.lastrowid)
 
         except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-
-            return None
+            conn.rollback()
+            raise
 
         finally:
             conn.close()
 
 
 # ============================================================
-# OPTIONAL: GET WITHDRAWAL
+# OPTIONAL ADMIN / DEBUG HELPERS
 # ============================================================
 
 def get_withdrawal(withdrawal_id):
     with _db_lock:
         conn = get_connection()
-
         try:
             row = conn.execute(
                 """
@@ -998,14 +703,9 @@ def get_withdrawal(withdrawal_id):
             conn.close()
 
 
-# ============================================================
-# OPTIONAL: GET USER WITHDRAWALS
-# ============================================================
-
-def get_user_withdrawals(user_id):
+def get_pending_withdrawals():
     with _db_lock:
         conn = get_connection()
-
         try:
             rows = conn.execute(
                 """
@@ -1017,83 +717,21 @@ def get_user_withdrawals(user_id):
                     status,
                     created_at
                 FROM withdrawals
-                WHERE user_id = ?
-                ORDER BY id DESC
-                """,
-                (int(user_id),),
+                WHERE status = 'pending'
+                ORDER BY id ASC
+                """
             ).fetchall()
 
-            return [
-                dict(row)
-                for row in rows
-            ]
+            return [dict(row) for row in rows]
 
         finally:
             conn.close()
 
 
 # ============================================================
-# OPTIONAL: UPDATE WITHDRAWAL STATUS
+# AUTO INIT
 # ============================================================
 
-def update_withdrawal_status(
-    withdrawal_id,
-    status,
-):
-    """
-    Example status:
-        pending
-        approved
-        rejected
-        paid
-
-    Note:
-    This function does NOT automatically refund a rejected
-    withdrawal. If you want rejection refund logic, handle it
-    separately.
-    """
-
-    allowed = {
-        "pending",
-        "approved",
-        "rejected",
-        "paid",
-    }
-
-    status = str(status).lower().strip()
-
-    if status not in allowed:
-        return False
-
-    with _db_lock:
-        conn = get_connection()
-
-        try:
-            cursor = conn.execute(
-                """
-                UPDATE withdrawals
-                SET status = ?
-                WHERE id = ?
-                """,
-                (
-                    status,
-                    int(withdrawal_id),
-                ),
-            )
-
-            conn.commit()
-
-            return cursor.rowcount > 0
-
-        finally:
-            conn.close()
-
-
-# ============================================================
-# DATABASE READY
-# ============================================================
-
-if __name__ == "__main__":
-    init_db()
-    print("✅ Database initialized successfully.")
-    print(f"📁 Database file: {DB_NAME}")
+# This makes the database ready even if another module imports
+# database.py before bot.main() calls init_db().
+init_db()
