@@ -1,6 +1,6 @@
 # ============================================================
 # reward.py
-# TEMP MAIL BOT - REWARD SYSTEM
+# TEMP MAIL TELEGRAM BOT - REWARD SYSTEM
 # ============================================================
 
 from decimal import Decimal
@@ -12,34 +12,40 @@ from database import (
     get_referrer,
 )
 
+
 # ============================================================
 # REWARD AMOUNTS
 # ============================================================
 
-EMAIL_CODE_REWARD = Decimal("0.00130")
+EMAIL_REWARD = Decimal("0.00130")
 REFERRAL_REWARD = Decimal("0.00158")
 
-# Backward-compatible name
-EMAIL_REWARD = EMAIL_CODE_REWARD
+# Names used directly by bot.py
+EMAIL_CODE_REWARD = EMAIL_REWARD
+EMAIL_REWARD_AMOUNT = float(EMAIL_REWARD)
+REFERRAL_REWARD_AMOUNT = float(REFERRAL_REWARD)
 
 
 # ============================================================
-# FORMAT REWARD
+# FORMAT
 # ============================================================
 
 def format_reward(amount):
     """
-    Reward amount সুন্দরভাবে format করবে।
+    Format reward amount for Telegram messages.
+
     Example:
         0.00130 -> $0.00130
-        0.00158 -> $0.00158
     """
-
     try:
-        value = Decimal(str(amount))
-        return f"${value:.5f}"
+        return f"${Decimal(str(amount)):.5f}"
     except Exception:
         return "$0.00000"
+
+
+def format_balance(user_id):
+    balance = Decimal(str(get_balance(int(user_id))))
+    return f"${balance:.5f}"
 
 
 # ============================================================
@@ -48,12 +54,8 @@ def format_reward(amount):
 
 def reward_email_code(user_id, reward_key):
     """
-    একটি unique email/code-এর জন্য user-কে reward দেবে।
-
-    একই user + একই reward_key আবার এলে
-    দ্বিতীয়বার balance add হবে না।
+    Give reward only once for the same user + reward_key.
     """
-
     user_id = int(user_id)
 
     if not reward_key:
@@ -74,30 +76,18 @@ def reward_email_code(user_id, reward_key):
             "balance": get_balance(user_id),
         }
 
-    try:
-        added, balance = add_email_reward_once(
-            user_id=user_id,
-            reward_key=reward_key,
-            amount=float(EMAIL_CODE_REWARD),
-        )
+    added, balance = add_email_reward_once(
+        user_id=user_id,
+        reward_key=reward_key,
+        amount=EMAIL_REWARD,
+    )
 
-        return {
-            "success": True,
-            "added": added,
-            "amount": (
-                float(EMAIL_CODE_REWARD)
-                if added else 0.0
-            ),
-            "balance": balance,
-        }
-
-    except Exception:
-        return {
-            "success": False,
-            "added": False,
-            "amount": 0.0,
-            "balance": get_balance(user_id),
-        }
+    return {
+        "success": True,
+        "added": added,
+        "amount": float(EMAIL_REWARD) if added else 0.0,
+        "balance": balance,
+    }
 
 
 # ============================================================
@@ -106,13 +96,8 @@ def reward_email_code(user_id, reward_key):
 
 def reward_referral(referrer_id, referred_id):
     """
-    নতুন referred user-এর জন্য referrer-কে
-    $0.00158 reward দেবে।
-
-    একই referred user-এর জন্য
-    দ্বিতীয়বার reward দেওয়া যাবে না।
+    Give referral reward only once for a referred user.
     """
-
     referrer_id = int(referrer_id)
     referred_id = int(referred_id)
 
@@ -124,30 +109,18 @@ def reward_referral(referrer_id, referred_id):
             "balance": get_balance(referrer_id),
         }
 
-    try:
-        added, balance = add_referral_once(
-            referrer_id=referrer_id,
-            referred_id=referred_id,
-            amount=float(REFERRAL_REWARD),
-        )
+    added, balance = add_referral_once(
+        referrer_id=referrer_id,
+        referred_id=referred_id,
+        amount=REFERRAL_REWARD,
+    )
 
-        return {
-            "success": True,
-            "added": added,
-            "amount": (
-                float(REFERRAL_REWARD)
-                if added else 0.0
-            ),
-            "balance": balance,
-        }
-
-    except Exception:
-        return {
-            "success": False,
-            "added": False,
-            "amount": 0.0,
-            "balance": get_balance(referrer_id),
-        }
+    return {
+        "success": True,
+        "added": added,
+        "amount": float(REFERRAL_REWARD) if added else 0.0,
+        "balance": balance,
+    }
 
 
 # ============================================================
@@ -156,10 +129,9 @@ def reward_referral(referrer_id, referred_id):
 
 def process_referral(user_id):
     """
-    User-এর database-এ referrer থাকলে
-    referrer-কে একবার referral reward দেওয়ার চেষ্টা করবে।
+    If the user has a referrer, give the referrer
+    the referral reward once.
     """
-
     user_id = int(user_id)
 
     referrer_id = get_referrer(user_id)
@@ -174,31 +146,11 @@ def process_referral(user_id):
 
 
 # ============================================================
-# BALANCE INFO
+# BALANCE
 # ============================================================
 
 def get_user_balance(user_id):
-    """
-    User-এর current balance return করবে।
-    """
-
     return get_balance(int(user_id))
-
-
-# ============================================================
-# FORMAT BALANCE
-# ============================================================
-
-def format_balance(user_id):
-    """
-    Telegram message-এর জন্য balance সুন্দরভাবে format করবে।
-    """
-
-    balance = Decimal(
-        str(get_balance(int(user_id)))
-    )
-
-    return f"${balance:.5f}"
 
 
 # ============================================================
@@ -206,11 +158,6 @@ def format_balance(user_id):
 # ============================================================
 
 def email_reward_message(user_id, reward_key):
-    """
-    Email/code receive করার পর Telegram-এ
-    reward message তৈরি করবে।
-    """
-
     result = reward_email_code(
         user_id=user_id,
         reward_key=reward_key,
@@ -231,14 +178,7 @@ def email_reward_message(user_id, reward_key):
 # REFERRAL REWARD MESSAGE
 # ============================================================
 
-def referral_reward_message(
-    referrer_id,
-    referred_id,
-):
-    """
-    Referral successful হলে message return করবে।
-    """
-
+def referral_reward_message(referrer_id, referred_id):
     result = reward_referral(
         referrer_id=referrer_id,
         referred_id=referred_id,
@@ -250,15 +190,7 @@ def referral_reward_message(
             f"💰 You earned: "
             f"{format_reward(result['amount'])}\n"
             f"💳 Balance: "
-            f"${Decimal(str(result['balance'])):.5f}"
+            f"{format_reward(result['balance'])}"
         )
 
     return None
-
-
-# ============================================================
-# CONSTANTS
-# ============================================================
-
-EMAIL_REWARD_AMOUNT = float(EMAIL_CODE_REWARD)
-REFERRAL_REWARD_AMOUNT = float(REFERRAL_REWARD)
