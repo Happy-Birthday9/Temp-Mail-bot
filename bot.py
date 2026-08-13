@@ -1,6 +1,15 @@
 # ============================================================
 # bot.py
 # TEMP MAIL TELEGRAM BOT
+# Features:
+# - Temporary mailbox generation
+# - Automatic inbox polling
+# - Verification-code detection from SUBJECT + BODY
+# - Copy Code button
+# - +0.00130 reward ONCE per unique email/message
+# - /refer referral system (+0.00158 per successful referral)
+# - /balance balance + demo withdraw flow
+# - English / বাংলা / Hindi
 # ============================================================
 
 import asyncio
@@ -8,8 +17,8 @@ import html
 import json
 import logging
 import re
+import sqlite3
 from datetime import datetime
-from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -20,14 +29,14 @@ from telegram import (
     InlineKeyboardMarkup,
     CopyTextButton,
     ReplyKeyboardMarkup,
+    KeyboardButton,
 )
+
 from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
-    MessageHandler,
     ContextTypes,
-    filters,
 )
 
 from config import BOT_TOKEN, ADMIN_IDS
@@ -40,54 +49,376 @@ from database import (
     save_mailbox,
     get_mailbox,
     get_all_users,
-    get_balance,
-    add_email_reward_once,
-    get_reward_count,
-    get_referral_count,
-    set_referrer,
-    get_referrer,
-    add_referral_once,
-    create_withdrawal,
 )
 
-from reward import (
-    REFERRAL_REWARD,
-    EMAIL_CODE_REWARD,
-    format_reward,
-)
 
 # ============================================================
 # SETTINGS
 # ============================================================
 
 API_BASE = "https://smails.dev/api"
+
 POLL_SECONDS = 3
 MAX_MESSAGES = 10
-MIN_WITHDRAW = Decimal("1.00")
+
+EMAIL_REWARD = 0.00130
+REFERRAL_REWARD = 0.00158
+
 DHAKA_TZ = ZoneInfo("Asia/Dhaka")
+
+REWARD_DB = "rewards.db"
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+
 logger = logging.getLogger(__name__)
 
-# user_id -> set(message ids)
-SEEN_MESSAGES = {}
-
-# user_id -> mailbox token
-KNOWN_MAILBOX = {}
-
-# user_id -> withdraw state
-WITHDRAW_STATE = {}
 
 # ============================================================
-# TEXT
+# MEMORY CACHE
+# ============================================================
+
+SEEN_MESSAGES = {}
+KNOWN_MAILBOX = {}
+
+
+# ============================================================
+# REWARD DATABASE
+# ============================================================
+
+def reward_db():
+    conn = sqlite3.connect(REWARD_DB)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_reward_db():
+    conn = reward_db()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS reward_users (
+                user_id INTEGER PRIMARY KEY,
+                balance REAL NOT NULL DEFAULT 0,
+                referral_code TEXT UNIQUE,
+                referred_by INTEGER,
+                total_referrals INTEGER NOT NULL DEFAULT 0,
+                total_email_rewards INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        # One row per unique mailbox/message identity.
+        # This prevents the same email reward from being paid again
+        # after Refresh or another polling cycle.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS rewarded_messages (
+                user_id INTEGER NOT NULL,
+                message_id TEXT NOT NULL,
+                code TEXT,
+                amount REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, message_id)
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS referrals (
+                referred_user_id INTEGER PRIMARY KEY,
+                referrer_user_id INTEGER NOT NULL,
+                reward REAL NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS withdraw_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                binance_id TEXT NOT NULL,
+                amount REAL NOT NULL,
+                status TEXT NOT NULL DEFAULT 'DEMO_RECORDED',
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def ensure_reward_user(user_id):
+    conn = reward_db()
+    try:
+        row = conn.execute(
+            "SELECT user_id FROM reward_users WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
+
+        if not row:
+            referral_code = str(user_id)
+            conn.execute(
+                """
+                INSERT INTO reward_users
+                (user_id, balance, referral_code, created_at)
+                VALUES (?, 0, ?, ?)
+                """,
+                (
+                    user_id,
+                    referral_code,
+                    datetime.now(DHAKA_TZ).isoformat(),
+                )
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def get_balance(user_id):
+    ensure_reward_user(user_id)
+
+    conn = reward_db()
+    try:
+        row = conn.execute(
+            "SELECT balance FROM reward_users WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
+
+        return float(row["balance"]) if row else 0.0
+    finally:
+        conn.close()
+
+
+def get_total_referrals(user_id):
+    ensure_reward_user(user_id)
+
+    conn = reward_db()
+    try:
+        row = conn.execute(
+            """
+            SELECT total_referrals
+            FROM reward_users
+            WHERE user_id = ?
+            """,
+            (user_id,)
+        ).fetchone()
+
+        return int(row["total_referrals"]) if row else 0
+    finally:
+        conn.close()
+
+
+def add_email_reward(user_id, message_id, code):
+    """
+    Gives EMAIL_REWARD only once for a particular user + message_id.
+
+    Returns:
+        True  -> reward was newly added
+        False -> this message was already rewarded
+    """
+    ensure_reward_user(user_id)
+
+    message_id = str(message_id)
+
+    conn = reward_db()
+    try:
+        # Atomic transaction: INSERT OR IGNORE prevents duplicates.
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO rewarded_messages
+            (user_id, message_id, code, amount, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                message_id,
+                str(code) if code else None,
+                EMAIL_REWARD,
+                datetime.now(DHAKA_TZ).isoformat(),
+            )
+        )
+
+        if cursor.rowcount == 0:
+            conn.rollback()
+            return False
+
+        conn.execute(
+            """
+            UPDATE reward_users
+            SET balance = balance + ?,
+                total_email_rewards = total_email_rewards + 1
+            WHERE user_id = ?
+            """,
+            (EMAIL_REWARD, user_id)
+        )
+
+        conn.commit()
+        return True
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def create_referral(referrer_id, referred_user_id):
+    """
+    Gives REFERRAL_REWARD once when a NEW user successfully joins
+    through a valid referral code.
+    """
+    if not referrer_id or not referred_user_id:
+        return False
+
+    if int(referrer_id) == int(referred_user_id):
+        return False
+
+    ensure_reward_user(referrer_id)
+    ensure_reward_user(referred_user_id)
+
+    conn = reward_db()
+
+    try:
+        # A user can only have one referrer.
+        existing = conn.execute(
+            """
+            SELECT referred_user_id
+            FROM referrals
+            WHERE referred_user_id = ?
+            """,
+            (referred_user_id,)
+        ).fetchone()
+
+        if existing:
+            return False
+
+        # Make sure the referred user did not already have a referrer.
+        row = conn.execute(
+            """
+            SELECT referred_by
+            FROM reward_users
+            WHERE user_id = ?
+            """,
+            (referred_user_id,)
+        ).fetchone()
+
+        if row and row["referred_by"]:
+            return False
+
+        conn.execute(
+            """
+            INSERT INTO referrals
+            (referred_user_id, referrer_user_id, reward, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                referred_user_id,
+                referrer_id,
+                REFERRAL_REWARD,
+                datetime.now(DHAKA_TZ).isoformat(),
+            )
+        )
+
+        conn.execute(
+            """
+            UPDATE reward_users
+            SET referred_by = ?
+            WHERE user_id = ?
+            """,
+            (referrer_id, referred_user_id)
+        )
+
+        conn.execute(
+            """
+            UPDATE reward_users
+            SET balance = balance + ?,
+                total_referrals = total_referrals + 1
+            WHERE user_id = ?
+            """,
+            (REFERRAL_REWARD, referrer_id)
+        )
+
+        conn.commit()
+        return True
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def create_withdraw_request(user_id, binance_id, amount):
+    """
+    Creates a withdrawal request and deducts the requested amount
+    atomically from the user's balance.
+    Returns True on success, False if the balance is insufficient.
+    """
+    ensure_reward_user(user_id)
+
+    amount = float(amount)
+    if amount <= 0:
+        return False
+
+    conn = reward_db()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        row = conn.execute(
+            "SELECT balance FROM reward_users WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
+
+        balance = float(row["balance"]) if row else 0.0
+
+        if balance < amount:
+            conn.rollback()
+            return False
+
+        conn.execute(
+            """
+            INSERT INTO withdraw_requests
+            (user_id, binance_id, amount, status, created_at)
+            VALUES (?, ?, ?, 'PENDING', ?)
+            """,
+            (
+                user_id,
+                str(binance_id),
+                amount,
+                datetime.now(DHAKA_TZ).isoformat(),
+            )
+        )
+
+        conn.execute(
+            """
+            UPDATE reward_users
+            SET balance = balance - ?
+            WHERE user_id = ?
+            """,
+            (amount, user_id)
+        )
+
+        conn.commit()
+        return True
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+# ============================================================
+# LANGUAGES
 # ============================================================
 
 TEXT = {
+
     "en": {
-        "welcome": (
+
+        "welcome":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      📧 <b>TEMP MAIL BOT</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
@@ -95,17 +426,19 @@ TEXT = {
             "⚡ Fast temporary email receiver\n"
             "📩 Receive verification emails\n"
             "🔐 Verification codes are detected automatically\n\n"
-            "🌐 <b>Please select your preferred language:</b>"
-        ),
-        "language_ok": (
+            "🌐 <b>Please select your preferred language:</b>",
+
+        "language_ok":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      ✅ <b>SUCCESS</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "Language selected successfully!\n\n"
-            "⚡ Creating your temporary email..."
-        ),
-        "generating": "⚡ <b>Creating your temporary email...</b>",
-        "created": (
+            "⚡ Creating your temporary email...",
+
+        "generating":
+            "⚡ <b>Creating your temporary email...</b>",
+
+        "created":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "   📧 <b>NEW TEMP EMAIL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
@@ -113,28 +446,28 @@ TEXT = {
             "<code>{email}</code>\n\n"
             "🟢 <b>Status:</b> Active\n\n"
             "You can now receive emails here.\n\n"
-            "📩 New emails will be detected automatically."
-        ),
+            "📩 New emails will be detected automatically.",
+
         "generate": "➕ Generate New",
         "inbox": "📥 Inbox",
         "refresh": "🔄 Refresh",
-        "refer": "👥 Refer System",
-        "balance": "💰 Balance",
-        "withdraw": "💸 Withdraw",
-        "checking": "🔎 <b>Checking your inbox...</b>",
-        "empty": (
+
+        "checking":
+            "🔎 <b>Checking your inbox...</b>",
+
+        "empty":
             "📭 <b>Inbox is empty.</b>\n\n"
-            "No new messages received yet."
-        ),
-        "no_mailbox": (
+            "No messages received yet.",
+
+        "no_mailbox":
             "⚠️ <b>No temporary email found.</b>\n\n"
-            "Please generate a new email first."
-        ),
-        "api_error": (
+            "Please generate a new email first.",
+
+        "api_error":
             "❌ <b>Something went wrong.</b>\n\n"
-            "Please try again later."
-        ),
-        "new_mail": (
+            "Please try again later.",
+
+        "new_mail":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "       📨 <b>NEW EMAIL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
@@ -142,121 +475,125 @@ TEXT = {
             "👤 <b>From:</b> {sender}\n"
             "📌 <b>Subject:</b> {subject}\n"
             "🕐 <b>Dhaka Time:</b> {date}\n\n"
-            "{content}"
-        ),
-        "message_content": (
+            "{content}",
+
+        "earned":
+            "💰 <b>Your earned:</b> <code>{amount}</code>",
+
+        "message_content":
             "💬 <b>Message:</b>\n"
-            "{body}"
-        ),
-        "verification": (
-            "🔐 <b>Verification Code:</b>\n"
-            "<code>{code}</code>\n\n"
-            "💰 <b>You earned:</b> $0.00130"
-        ),
-        "copy_code": "📋 Copy Code",
-        "inbox_footer": "━━━━━━━━━━━━━━━━━━\n📥 <b>Inbox</b>\n━━━━━━━━━━━━━━━━━━",
-        "refer_title": (
-            "╭━━━━━━━━━━━━━━━━━━╮\n"
-            "      👥 <b>REFER & EARN</b>\n"
-            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-        ),
-        "refer_body": (
-            "💰 প্রতি সফল Refer: <b>$0.00158</b>\n"
-            "👥 মোট Refer: <b>{count}</b>\n\n"
-            "🔗 <b>Your Referral Link:</b>\n"
-            "<code>{link}</code>\n\n"
-            "বন্ধুদের সাথে Link share করুন।"
-        ),
-        "balance_text": (
-            "╭━━━━━━━━━━━━━━━━━━╮\n"
-            "        💰 <b>BALANCE</b>\n"
-            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "💵 <b>Current Balance:</b> ${balance}\n"
-            "👥 <b>Total Refers:</b> {referrals}\n"
-            "📧 <b>Code Rewards:</b> {codes}\n\n"
-            "Minimum Withdrawal: <b>$1.00</b>"
-        ),
-        "send_binance": (
-            "💸 <b>Withdraw</b>\n\n"
-            "Send your <b>Binance ID</b>:"
-        ),
-        "send_amount": (
-            "💰 Send the withdrawal amount.\n\n"
-            "Minimum: <b>$1.00</b>\n"
-            "Available: <b>${balance}</b>"
-        ),
-        "invalid_amount": "❌ Please send a valid amount.",
-        "min_withdraw": "❌ Minimum withdrawal is <b>$1.00</b>.",
-        "insufficient": "❌ Insufficient balance.",
-        "withdraw_success": (
-            "✅ <b>Withdrawal Request Submitted</b>\n\n"
-            "💸 Amount: <b>${amount}</b>\n"
-            "🆔 Binance ID: <code>{binance}</code>\n"
-            "💰 Remaining Balance: <b>${balance}</b>\n\n"
-            "📨 Your withdrawal request has been submitted to the admin."
-        ),
-        "withdraw_failed": "❌ Withdrawal request failed. Please try again.",
-        "cancelled": "❌ Withdrawal cancelled.",
-        "help": (
+            "{body}",
+
+        "verification":
+            "🔐 <b>VERIFICATION CODE</b>\n\n"
+            "🔢 <b>Code:</b> <code>{code}</code>",
+
+        "copy_code":
+            "📋 Copy Code",
+
+        "code_copied":
+            "✅ Code: <code>{code}</code>",
+
+        "language":
+            "🌐 <b>Select your preferred language:</b>",
+
+        "help":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "        📚 <b>HELP</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "➕ Generate New — Create a new email\n"
             "📥 Inbox — View received emails\n"
             "🔄 Refresh — Check new emails\n"
-            "👥 /refer — Refer & Earn\n"
-            "💰 /balance — Check balance\n"
-            "💸 Withdraw — Request withdrawal\n\n"
+            "👥 /refer — Referral system\n"
+            "💰 /balance — Check balance\n\n"
             "/start — Start bot\n"
             "/language — Change language\n"
             "/inbox — Open inbox\n"
             "/refresh — Refresh inbox\n"
             "/help — Show help\n"
             "/about — About bot\n"
-            "/stats — Bot statistics"
-        ),
-        "about": (
+            "/stats — Bot statistics",
+
+        "about":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      📧 <b>TEMP MAIL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "Fast disposable email receiver.\n\n"
             "⚡ Powered by Smails API\n"
-            "🔒 No API key required"
-        ),
-        "stats": (
+            "🔒 No API key required",
+
+        "stats":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "       📊 <b>BOT STATS</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "👥 Total Users: <b>{users}</b>\n"
             "📧 Active Mailboxes: <b>{mailboxes}</b>\n"
             "⚡ Auto Inbox: <b>ON</b>\n"
-            "🔄 Polling: <b>{seconds}s</b>"
-        ),
-        "admin_only": (
+            "🔄 Polling: <b>{seconds}s</b>",
+
+        "admin_only":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      🔐 <b>ADMIN ONLY</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "Sorry! This command is available only for administrators."
-        ),
-        "broadcast_start": (
+            "Sorry! This command is available\n"
+            "only for administrators.",
+
+        "broadcast_start":
             "📢 <b>Broadcast Mode</b>\n\n"
-            "Use:\n<code>/broadcast Your message</code>"
-        ),
-        "broadcast_done": (
+            "Use:\n"
+            "<code>/broadcast Your message</code>",
+
+        "broadcast_done":
             "✅ <b>Broadcast completed!</b>\n\n"
             "📤 Sent: <b>{sent}</b>\n"
-            "❌ Failed: <b>{failed}</b>"
-        ),
-        "admin_panel": (
+            "❌ Failed: <b>{failed}</b>",
+
+        "admin_panel":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "       👑 <b>ADMIN PANEL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "🔐 You have administrator access."
-        ),
+            "🔐 You have administrator access.",
+
+        "refer":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "       👥 <b>REFER & EARN</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "💰 Per successful referral: <b>{reward}</b>\n"
+            "👥 Total referrals: <b>{refs}</b>\n\n"
+            "🔗 <b>Your referral link:</b>\n"
+            "<code>{link}</code>\n\n"
+            "Share the link with your friends.",
+
+        "balance":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "       💰 <b>BALANCE</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "💵 Balance: <b>{balance}</b>\n"
+            "👥 Referrals: <b>{refs}</b>\n"
+            "📩 Email rewards: <b>{email_reward}</b>\n"
+            "📌 Minimum Withdraw: <b>$1.00</b>\n"
+            "💡 Balance must be at least $1.00 to withdraw.",
+
+        "withdraw_button": "💸 Withdraw",
+
+        "withdraw_prompt":
+            "💸 <b>Withdraw</b>\n\n"
+            "Send your Binance ID:",
+
+        "withdraw_invalid":
+            "⚠️ Please send a valid Binance ID.",
+
+        "withdraw_recorded":
+            "✅ <b>Withdrawal request recorded.</b>\n\n"
+            "💵 Amount: <b>{amount}</b>\n"
+            "🆔 Binance ID: <code>{binance_id}</code>\n\n"
+            "📌 Your request has been submitted for payment processing.",
+
     },
 
     "bn": {
-        "welcome": (
+
+        "welcome":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      📧 <b>TEMP MAIL BOT</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
@@ -264,17 +601,19 @@ TEXT = {
             "⚡ দ্রুত Temporary Email receiver\n"
             "📩 Verification Email গ্রহণ করুন\n"
             "🔐 Verification Code Automatic Detect হবে\n\n"
-            "🌐 <b>আপনার পছন্দের ভাষা নির্বাচন করুন:</b>"
-        ),
-        "language_ok": (
+            "🌐 <b>আপনার পছন্দের ভাষা নির্বাচন করুন:</b>",
+
+        "language_ok":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      ✅ <b>সফল হয়েছে</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "ভাষা সফলভাবে নির্বাচন করা হয়েছে!\n\n"
-            "⚡ আপনার Temporary Email তৈরি হচ্ছে..."
-        ),
-        "generating": "⚡ <b>আপনার Temporary Email তৈরি হচ্ছে...</b>",
-        "created": (
+            "⚡ আপনার Temporary Email তৈরি হচ্ছে...",
+
+        "generating":
+            "⚡ <b>আপনার Temporary Email তৈরি হচ্ছে...</b>",
+
+        "created":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "   📧 <b>নতুন TEMP EMAIL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
@@ -282,22 +621,28 @@ TEXT = {
             "<code>{email}</code>\n\n"
             "🟢 <b>Status:</b> Active\n\n"
             "এখন এই Email-এ Message গ্রহণ করতে পারবেন।\n\n"
-            "📩 নতুন Email এলে Automatic দেখাবে।"
-        ),
+            "📩 নতুন Email এলে Automatic দেখাবে।",
+
         "generate": "➕ নতুন তৈরি করুন",
         "inbox": "📥 ইনবক্স",
         "refresh": "🔄 রিফ্রেশ",
-        "refer": "👥 Refer System",
-        "balance": "💰 Balance",
-        "withdraw": "💸 Withdraw",
-        "checking": "🔎 <b>আপনার Inbox check করা হচ্ছে...</b>",
-        "empty": "📭 <b>Inbox খালি।</b>\n\nএখনো কোনো নতুন Message আসেনি।",
-        "no_mailbox": (
+
+        "checking":
+            "🔎 <b>আপনার Inbox check করা হচ্ছে...</b>",
+
+        "empty":
+            "📭 <b>Inbox খালি।</b>\n\n"
+            "এখনো কোনো Message আসেনি।",
+
+        "no_mailbox":
             "⚠️ <b>কোনো Temporary Email পাওয়া যায়নি।</b>\n\n"
-            "প্রথমে নতুন Email তৈরি করুন।"
-        ),
-        "api_error": "❌ <b>সমস্যা হয়েছে।</b>\n\nকিছুক্ষণ পর আবার চেষ্টা করুন।",
-        "new_mail": (
+            "প্রথমে নতুন Email তৈরি করুন।",
+
+        "api_error":
+            "❌ <b>সমস্যা হয়েছে।</b>\n\n"
+            "কিছুক্ষণ পর আবার চেষ্টা করুন।",
+
+        "new_mail":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "       📨 <b>নতুন EMAIL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
@@ -305,115 +650,123 @@ TEXT = {
             "👤 <b>From:</b> {sender}\n"
             "📌 <b>Subject:</b> {subject}\n"
             "🕐 <b>ঢাকা সময়:</b> {date}\n\n"
-            "{content}"
-        ),
-        "message_content": "💬 <b>Message:</b>\n{body}",
-        "verification": (
-            "🔐 <b>Verification Code:</b>\n"
-            "<code>{code}</code>\n\n"
-            "💰 <b>You earned:</b> $0.00130"
-        ),
+            "{content}",
+
+        "earned":
+            "💰 <b>Your earned:</b> <code>{amount}</code>",
+
+        "message_content":
+            "💬 <b>Message:</b>\n"
+            "{body}",
+
+        "verification":
+            "🔐 <b>VERIFICATION CODE</b>\n\n"
+            "🔢 <b>Code:</b> <code>{code}</code>",
+
         "copy_code": "📋 Code Copy করুন",
-        "inbox_footer": "━━━━━━━━━━━━━━━━━━\n📥 <b>Inbox</b>\n━━━━━━━━━━━━━━━━━━",
-        "refer_title": (
-            "╭━━━━━━━━━━━━━━━━━━╮\n"
-            "      👥 <b>REFER & EARN</b>\n"
-            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-        ),
-        "refer_body": (
-            "💰 প্রতি সফল Refer: <b>$0.00158</b>\n"
-            "👥 মোট Refer: <b>{count}</b>\n\n"
-            "🔗 <b>আপনার Referral Link:</b>\n"
-            "<code>{link}</code>\n\n"
-            "বন্ধুদের সাথে Link share করুন।"
-        ),
-        "balance_text": (
-            "╭━━━━━━━━━━━━━━━━━━╮\n"
-            "        💰 <b>BALANCE</b>\n"
-            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "💵 <b>বর্তমান Balance:</b> ${balance}\n"
-            "👥 <b>মোট Refer:</b> {referrals}\n"
-            "📧 <b>Code Reward:</b> {codes}\n\n"
-            "Minimum Withdrawal: <b>$1.00</b>"
-        ),
-        "send_binance": "💸 <b>Withdraw</b>\n\nআপনার <b>Binance ID</b> পাঠান:",
-        "send_amount": (
-            "💰 এখন withdrawal amount পাঠান।\n\n"
-            "Minimum: <b>$1.00</b>\n"
-            "Available: <b>${balance}</b>"
-        ),
-        "invalid_amount": "❌ সঠিক amount দিন।",
-        "min_withdraw": "❌ Minimum withdrawal হলো <b>$1.00</b>।",
-        "insufficient": "❌ আপনার Balance যথেষ্ট নয়।",
-        "withdraw_success": (
-            "✅ <b>Withdrawal Request Submitted</b>\n\n"
-            "💸 Amount: <b>${amount}</b>\n"
-            "🆔 Binance ID: <code>{binance}</code>\n"
-            "💰 Remaining Balance: <b>${balance}</b>\n\n"
-            "📨 আপনার withdrawal request admin-এর কাছে পাঠানো হয়েছে।"
-        ),
-        "withdraw_failed": "❌ Withdrawal request failed। আবার চেষ্টা করুন।",
-        "cancelled": "❌ Withdrawal cancelled.",
-        "help": (
+
+        "code_copied":
+            "✅ Code: <code>{code}</code>",
+
+        "language":
+            "🌐 <b>আপনার পছন্দের ভাষা নির্বাচন করুন:</b>",
+
+        "help":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "        📚 <b>HELP</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "➕ নতুন তৈরি করুন — নতুন Email\n"
             "📥 ইনবক্স — আসা Email দেখুন\n"
             "🔄 রিফ্রেশ — নতুন Email check করুন\n"
-            "👥 /refer — Refer & Earn\n"
-            "💰 /balance — Balance দেখুন\n"
-            "💸 Withdraw — Demo withdrawal\n\n"
+            "👥 /refer — Refer করুন\n"
+            "💰 /balance — Balance দেখুন\n\n"
             "/start — Bot শুরু করুন\n"
             "/language — ভাষা পরিবর্তন\n"
             "/inbox — Inbox দেখুন\n"
             "/refresh — Inbox Refresh\n"
             "/help — Help দেখুন\n"
             "/about — Bot সম্পর্কে\n"
-            "/stats — Bot Statistics"
-        ),
-        "about": (
+            "/stats — Bot Statistics",
+
+        "about":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      📧 <b>TEMP MAIL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "দ্রুত Temporary Email receiver।\n\n"
             "⚡ Smails API দ্বারা পরিচালিত\n"
-            "🔒 API key প্রয়োজন নেই"
-        ),
-        "stats": (
+            "🔒 API key প্রয়োজন নেই",
+
+        "stats":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "       📊 <b>BOT STATS</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "👥 Total Users: <b>{users}</b>\n"
             "📧 Active Mailboxes: <b>{mailboxes}</b>\n"
             "⚡ Auto Inbox: <b>ON</b>\n"
-            "🔄 Checking: প্রতি <b>{seconds}s</b>"
-        ),
-        "admin_only": (
+            "🔄 Checking: প্রতি <b>{seconds}s</b>",
+
+        "admin_only":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      🔐 <b>ADMIN ONLY</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "দুঃখিত! এই Command শুধুমাত্র Administrator-এর জন্য।"
-        ),
-        "broadcast_start": (
+            "দুঃখিত! এই Command শুধুমাত্র\n"
+            "Administrator-এর জন্য।",
+
+        "broadcast_start":
             "📢 <b>Broadcast Mode</b>\n\n"
-            "ব্যবহার করুন:\n<code>/broadcast আপনার Message</code>"
-        ),
-        "broadcast_done": (
+            "ব্যবহার করুন:\n"
+            "<code>/broadcast আপনার Message</code>",
+
+        "broadcast_done":
             "✅ <b>Broadcast সম্পন্ন!</b>\n\n"
             "📤 পাঠানো হয়েছে: <b>{sent}</b>\n"
-            "❌ Failed: <b>{failed}</b>"
-        ),
-        "admin_panel": (
+            "❌ Failed: <b>{failed}</b>",
+
+        "admin_panel":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "       👑 <b>ADMIN PANEL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "🔐 আপনার Administrator access আছে।"
-        ),
+            "🔐 আপনার Administrator access আছে।",
+
+        "refer":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "       👥 <b>REFER & EARN</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "💰 প্রতি সফল Refer: <b>{reward}</b>\n"
+            "👥 মোট Refer: <b>{refs}</b>\n\n"
+            "🔗 <b>আপনার Referral Link:</b>\n"
+            "<code>{link}</code>\n\n"
+            "বন্ধুদের সাথে Link share করুন।",
+
+        "balance":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "       💰 <b>BALANCE</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "💵 Balance: <b>{balance}</b>\n"
+            "👥 Referrals: <b>{refs}</b>\n"
+            "📩 Email rewards: <b>{email_reward}</b>\n"
+            "📌 Minimum Withdraw: <b>$1.00</b>\n"
+            "💡 Balance must be at least $1.00 to withdraw.",
+
+        "withdraw_button": "💸 Withdraw",
+
+        "withdraw_prompt":
+            "💸 <b>Withdraw</b>\n\n"
+            "আপনার Binance ID পাঠান:",
+
+        "withdraw_invalid":
+            "⚠️ সঠিক Binance ID পাঠান।",
+
+        "withdraw_recorded":
+            "✅ <b>Withdrawal request record হয়েছে।</b>\n\n"
+            "💵 Amount: <b>{amount}</b>\n"
+            "🆔 Binance ID: <code>{binance_id}</code>\n\n"
+            "📌 আপনার request payment processing-এর জন্য পাঠানো হয়েছে।",
     },
 
     "hi": {
-        "welcome": (
+
+        "welcome":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      📧 <b>TEMP MAIL BOT</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
@@ -421,17 +774,19 @@ TEXT = {
             "⚡ Fast Temporary Email\n"
             "📩 Verification Email receive karein\n"
             "🔐 Verification Code automatically detect hoga\n\n"
-            "🌐 <b>Apni pasand ki language select karein:</b>"
-        ),
-        "language_ok": (
+            "🌐 <b>Apni pasand ki language select karein:</b>",
+
+        "language_ok":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      ✅ <b>SUCCESS</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "Language successfully select ho gayi!\n\n"
-            "⚡ Aapka Temporary Email create ho raha hai..."
-        ),
-        "generating": "⚡ <b>Aapka Temporary Email create ho raha hai...</b>",
-        "created": (
+            "⚡ Aapka Temporary Email create ho raha hai...",
+
+        "generating":
+            "⚡ <b>Aapka Temporary Email create ho raha hai...</b>",
+
+        "created":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "   📧 <b>NEW TEMP EMAIL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
@@ -439,19 +794,28 @@ TEXT = {
             "<code>{email}</code>\n\n"
             "🟢 <b>Status:</b> Active\n\n"
             "Ab aap is Email par messages receive kar sakte hain.\n\n"
-            "📩 Naya Email aate hi automatically dikhega."
-        ),
+            "📩 Naya Email aate hi automatically dikhega.",
+
         "generate": "➕ Naya Generate",
         "inbox": "📥 Inbox",
         "refresh": "🔄 Refresh",
-        "refer": "👥 Refer System",
-        "balance": "💰 Balance",
-        "withdraw": "💸 Withdraw",
-        "checking": "🔎 <b>Aapka Inbox check ho raha hai...</b>",
-        "empty": "📭 <b>Inbox empty hai.</b>\n\nAbhi koi naya message nahi aaya.",
-        "no_mailbox": "⚠️ <b>Koi Temporary Email nahi mila.</b>\n\nPehle naya Email generate karein.",
-        "api_error": "❌ <b>Kuch problem ho gayi.</b>\n\nThodi der baad dobara try karein.",
-        "new_mail": (
+
+        "checking":
+            "🔎 <b>Aapka Inbox check ho raha hai...</b>",
+
+        "empty":
+            "📭 <b>Inbox empty hai.</b>\n\n"
+            "Abhi koi naya message nahi aaya.",
+
+        "no_mailbox":
+            "⚠️ <b>Koi Temporary Email nahi mila.</b>\n\n"
+            "Pehle naya Email generate karein.",
+
+        "api_error":
+            "❌ <b>Kuch problem ho gayi.</b>\n\n"
+            "Thodi der baad dobara try karein.",
+
+        "new_mail":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "       📨 <b>NEW EMAIL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
@@ -459,119 +823,124 @@ TEXT = {
             "👤 <b>From:</b> {sender}\n"
             "📌 <b>Subject:</b> {subject}\n"
             "🕐 <b>Dhaka Time:</b> {date}\n\n"
-            "{content}"
-        ),
-        "message_content": "💬 <b>Message:</b>\n{body}",
-        "verification": (
-            "🔐 <b>Verification Code:</b>\n"
-            "<code>{code}</code>\n\n"
-            "💰 <b>You earned:</b> $0.00130"
-        ),
+            "{content}",
+
+        "earned":
+            "💰 <b>Your earned:</b> <code>{amount}</code>",
+
+        "message_content":
+            "💬 <b>Message:</b>\n"
+            "{body}",
+
+        "verification":
+            "🔐 <b>VERIFICATION CODE</b>\n\n"
+            "🔢 <b>Code:</b> <code>{code}</code>",
+
         "copy_code": "📋 Copy Code",
-        "inbox_footer": "━━━━━━━━━━━━━━━━━━\n📥 <b>Inbox</b>\n━━━━━━━━━━━━━━━━━━",
-        "refer_title": (
-            "╭━━━━━━━━━━━━━━━━━━╮\n"
-            "      👥 <b>REFER & EARN</b>\n"
-            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-        ),
-        "refer_body": (
-            "💰 प्रति सफल Refer: <b>$0.00158</b>\n"
-            "👥 कुल Refer: <b>{count}</b>\n\n"
-            "🔗 <b>Your Referral Link:</b>\n"
-            "<code>{link}</code>\n\n"
-            "दोस्तों के साथ Link share करें।"
-        ),
-        "balance_text": (
-            "╭━━━━━━━━━━━━━━━━━━╮\n"
-            "        💰 <b>BALANCE</b>\n"
-            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "💵 <b>Current Balance:</b> ${balance}\n"
-            "👥 <b>Total Refers:</b> {referrals}\n"
-            "📧 <b>Code Rewards:</b> {codes}\n\n"
-            "Minimum Withdrawal: <b>$1.00</b>"
-        ),
-        "send_binance": "💸 <b>Withdraw</b>\n\nApna <b>Binance ID</b> bhejein:",
-        "send_amount": (
-            "💰 Withdrawal amount bhejein.\n\n"
-            "Minimum: <b>$1.00</b>\n"
-            "Available: <b>${balance}</b>"
-        ),
-        "invalid_amount": "❌ Valid amount bhejein.",
-        "min_withdraw": "❌ Minimum withdrawal <b>$1.00</b> hai.",
-        "insufficient": "❌ Insufficient balance.",
-        "withdraw_success": (
-            "✅ <b>Withdrawal Request Submitted</b>\n\n"
-            "💸 Amount: <b>${amount}</b>\n"
-            "🆔 Binance ID: <code>{binance}</code>\n"
-            "💰 Remaining Balance: <b>${balance}</b>\n\n"
-            "📨 Demo withdrawal request recorded."
-        ),
-        "withdraw_failed": "❌ Withdrawal request failed. Dobara try karein.",
-        "cancelled": "❌ Withdrawal cancelled.",
-        "help": (
+
+        "code_copied":
+            "✅ Code: <code>{code}</code>",
+
+        "language":
+            "🌐 <b>Apni pasand ki language select karein:</b>",
+
+        "help":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "        📚 <b>HELP</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "➕ Naya Generate — Naya Email\n"
             "📥 Inbox — Received emails dekhein\n"
             "🔄 Refresh — Naye emails check karein\n"
-            "👥 /refer — Refer & Earn\n"
-            "💰 /balance — Balance dekhein\n"
-            "💸 Withdraw — Demo withdrawal\n\n"
+            "👥 /refer — Referral system\n"
+            "💰 /balance — Balance dekhein\n\n"
             "/start — Bot start karein\n"
             "/language — Language change karein\n"
             "/inbox — Inbox dekhein\n"
             "/refresh — Inbox refresh karein\n"
             "/help — Help dekhein\n"
             "/about — Bot ke baare mein\n"
-            "/stats — Bot Statistics"
-        ),
-        "about": (
+            "/stats — Bot Statistics",
+
+        "about":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      📧 <b>TEMP MAIL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "Fast Temporary Email receiver.\n\n"
             "⚡ Smails API se powered\n"
-            "🔒 API key ki zarurat nahi"
-        ),
-        "stats": (
+            "🔒 API key ki zarurat nahi",
+
+        "stats":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "       📊 <b>BOT STATS</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "👥 Total Users: <b>{users}</b>\n"
             "📧 Active Mailboxes: <b>{mailboxes}</b>\n"
             "⚡ Auto Inbox: <b>ON</b>\n"
-            "🔄 Checking: <b>{seconds}s</b>"
-        ),
-        "admin_only": (
+            "🔄 Checking: <b>{seconds}s</b>",
+
+        "admin_only":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "      🔐 <b>ADMIN ONLY</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "Maaf kijiye! Yeh command sirf Administrator ke liye hai."
-        ),
-        "broadcast_start": (
+            "Maaf kijiye! Yeh command sirf\n"
+            "Administrator ke liye hai.",
+
+        "broadcast_start":
             "📢 <b>Broadcast Mode</b>\n\n"
-            "Use karein:\n<code>/broadcast Your message</code>"
-        ),
-        "broadcast_done": (
+            "Use karein:\n"
+            "<code>/broadcast Your message</code>",
+
+        "broadcast_done":
             "✅ <b>Broadcast complete ho gaya!</b>\n\n"
             "📤 Sent: <b>{sent}</b>\n"
-            "❌ Failed: <b>{failed}</b>"
-        ),
-        "admin_panel": (
+            "❌ Failed: <b>{failed}</b>",
+
+        "admin_panel":
             "╭━━━━━━━━━━━━━━━━━━╮\n"
             "       👑 <b>ADMIN PANEL</b>\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
-            "🔐 Aapke paas Administrator access hai."
-        ),
+            "🔐 Aapke paas Administrator access hai.",
+
+        "refer":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "       👥 <b>REFER & EARN</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "💰 Per successful referral: <b>{reward}</b>\n"
+            "👥 Total referrals: <b>{refs}</b>\n\n"
+            "🔗 <b>Your referral link:</b>\n"
+            "<code>{link}</code>\n\n"
+            "Link apne friends ke saath share karein.",
+
+        "balance":
+            "╭━━━━━━━━━━━━━━━━━━╮\n"
+            "       💰 <b>BALANCE</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+            "💵 Balance: <b>{balance}</b>\n"
+            "👥 Referrals: <b>{refs}</b>\n"
+            "📩 Email rewards: <b>{email_reward}</b>\n"
+            "📌 Minimum Withdraw: <b>$1.00</b>\n"
+            "💡 Balance must be at least $1.00 to withdraw.",
+
+        "withdraw_button": "💸 Withdraw",
+
+        "withdraw_prompt":
+            "💸 <b>Withdraw</b>\n\n"
+            "Apna Binance ID bhejein:",
+
+        "withdraw_invalid":
+            "⚠️ Please send a valid Binance ID.",
+
+        "withdraw_recorded":
+            "✅ <b>Withdrawal request recorded.</b>\n\n"
+            "💵 Amount: <b>{amount}</b>\n"
+            "🆔 Binance ID: <code>{binance_id}</code>\n\n"
+            "📌 Aapka request payment processing ke liye submit ho gaya hai.",
     },
 }
 
+
 # ============================================================
 # KEYBOARDS
-# Main screen: exactly 3 buttons
-# 1) Generate New + Refresh
-# 2) Refer System
 # ============================================================
 
 def language_keyboard():
@@ -583,139 +952,60 @@ def language_keyboard():
 
 
 def main_keyboard(lang):
-    """
-    Telegram Reply Keyboard:
-    এই keyboard-টি message/input box-এর নিচে থাকে,
-    inline message-এর ভিতরে নয়।
-    """
     t = TEXT[lang]
 
     return ReplyKeyboardMarkup(
         [
             [
-                t["generate"],
-                t["refresh"],
+                KeyboardButton(t["generate"]),
+                KeyboardButton(t["refresh"]),
             ],
             [
-                t["refer"],
+                KeyboardButton("👥 Refer System"),
             ],
         ],
         resize_keyboard=True,
-        one_time_keyboard=False,
         is_persistent=True,
-        input_field_placeholder="Select an option...",
     )
 
 
-def balance_keyboard(lang):
+def code_keyboard(code, lang):
     t = TEXT[lang]
 
-    return ReplyKeyboardMarkup(
-        [
-            [t["withdraw"]],
-            [t["generate"], t["refresh"]],
-            [t["refer"]],
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=False,
-        is_persistent=True,
-    )
-
-
-def copy_code_keyboard(code, lang):
+    # CopyTextButton asks Telegram to copy the exact code.
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                TEXT[lang]["copy_code"],
-                copy_text=CopyTextButton(text=str(code)),
+                t["generate"],
+                callback_data="generate"
+            ),
+            InlineKeyboardButton(
+                t["copy_code"],
+                copy_text=CopyTextButton(text=str(code))
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                t["refresh"],
+                callback_data="refresh"
+            )
+        ],
+    ])
+
+
+def balance_keyboard(lang):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                TEXT[lang]["withdraw_button"],
+                callback_data="withdraw"
             )
         ]
     ])
 
 
 # ============================================================
-# MAIN REPLY-KEYBOARD BUTTONS
-# ============================================================
-
-async def start_withdraw_message(message, user_id, lang):
-    """Withdraw শুরু করবে ReplyKeyboard-এর button থেকে."""
-    current = Decimal(str(get_balance(user_id)))
-
-    if current < MIN_WITHDRAW:
-        await message.reply_text(
-            (
-                "❌ <b>Minimum Withdrawal: $1.00</b>\n\n"
-                f"💰 Your current balance: <b>${fmt_money(current)}</b>\n"
-                "আপনার balance $1.00 হলে withdrawal করতে পারবেন।"
-            ),
-            reply_markup=balance_keyboard(lang),
-            parse_mode="HTML",
-        )
-        return
-
-    WITHDRAW_STATE[user_id] = {
-        "step": "binance",
-        "binance_id": None,
-    }
-
-    await message.reply_text(
-        TEXT[lang]["send_binance"],
-        reply_markup=ReplyKeyboardMarkup(
-            [["/cancel"]],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        ),
-        parse_mode="HTML",
-    )
-
-
-async def main_button_handler(update, context):
-    """
-    Main custom keyboard-এর button click handle করে।
-    Button-গুলো Telegram-এর input field-এর নিচে দেখাবে।
-    """
-    user = update.effective_user
-    message = update.message
-
-    if not user or not message or not message.text:
-        return
-
-    value = message.text.strip()
-    user_id = user.id
-    lang = user_lang(user_id)
-
-    t = TEXT[lang]
-
-    # Generate New
-    if value == t["generate"]:
-        await generate_new(message, user_id, lang)
-        return
-
-    # Refresh
-    if value == t["refresh"]:
-        await show_inbox(message, user_id, lang)
-        return
-
-    # Refer System
-    if value == t["refer"]:
-        await show_refer(message, user_id, lang)
-        return
-
-    # Withdraw
-    if value == t["withdraw"]:
-        await start_withdraw_message(message, user_id, lang)
-        return
-
-    # If not a known button, do nothing here so the next
-    # text handler can process withdrawal input.
-    return
-
-
-# ============================================================
 # HELPERS
-# ============================================================
-
-
 # ============================================================
 
 def user_lang(user_id):
@@ -723,11 +1013,14 @@ def user_lang(user_id):
         lang = get_language(user_id)
     except Exception:
         lang = None
+
     return lang if lang in TEXT else "en"
 
 
 def safe(value):
-    return html.escape("" if value is None else str(value))
+    if value is None:
+        return ""
+    return html.escape(str(value))
 
 
 def is_admin(user_id):
@@ -735,14 +1028,10 @@ def is_admin(user_id):
 
 
 def dhaka_time():
-    return datetime.now(DHAKA_TZ).strftime("%d %b %Y, %I:%M:%S %p")
+    return datetime.now(DHAKA_TZ).strftime(
+        "%d %b %Y, %I:%M:%S %p"
+    )
 
-
-def fmt_money(value):
-    try:
-        return f"{Decimal(str(value)):.8f}".rstrip("0").rstrip(".")
-    except Exception:
-        return "0"
 
 # ============================================================
 # CODE DETECTION
@@ -755,9 +1044,14 @@ def extract_code(text):
     text = str(text)
 
     patterns = [
-        r"(?:verification|verify|verification\s*code|otp|code)\D{0,30}(\d{4,8})",
-        r"(?:one[\s-]*time[\s-]*password)\D{0,30}(\d{4,8})",
-        r"(?:login\s*code)\D{0,30}(\d{4,8})",
+        r"(?:verification|verify|verification\s*code|otp|code)"
+        r"\D{0,30}(\d{4,8})",
+
+        r"(?:one[\s-]*time[\s-]*password)"
+        r"\D{0,30}(\d{4,8})",
+
+        r"(?:login\s*code)"
+        r"\D{0,30}(\d{4,8})",
     ]
 
     for pattern in patterns:
@@ -765,36 +1059,47 @@ def extract_code(text):
         if match:
             return match.group(1)
 
+    # Subject যেমন: "Your Code - 850055"
     for digits in (6, 5, 4):
-        match = re.search(rf"(?<!\d)\d{{{digits}}}(?!\d)", text)
+        match = re.search(
+            rf"(?<!\d)\d{{{digits}}}(?!\d)",
+            text
+        )
         if match:
             return match.group(0)
 
     return None
+
 
 # ============================================================
 # MESSAGE ID
 # ============================================================
 
 def get_message_id(item):
-    for value in (
+    possible = [
         item.get("id"),
         item.get("messageId"),
         item.get("_id"),
         item.get("uid"),
-    ):
+    ]
+
+    for value in possible:
         if value is not None:
             return str(value)
 
     raw = (
-        str(item.get("subject", ""))
-        + "|" + str(item.get("date", ""))
-        + "|" + str(item.get("createdAt", ""))
-        + "|" + str(item.get("from", ""))
-        + "|" + str(item.get("intro", ""))
-        + "|" + str(item.get("text", ""))
+        str(item.get("subject", "")) + "|"
+        + str(item.get("date", "")) + "|"
+        + str(item.get("createdAt", "")) + "|"
+        + str(item.get("from", "")) + "|"
+        + str(item.get("intro", "")) + "|"
+        + str(item.get("text", "")) + "|"
+        + str(item.get("body", "")) + "|"
+        + str(item.get("content", ""))
     )
+
     return raw
+
 
 # ============================================================
 # API
@@ -802,6 +1107,7 @@ def get_message_id(item):
 
 async def api_request(method, endpoint, token=None):
     url = API_BASE + endpoint
+
     headers = {"Accept": "application/json"}
 
     if token:
@@ -814,11 +1120,14 @@ async def api_request(method, endpoint, token=None):
     )
 
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(
+            timeout=timeout
+        ) as session:
+
             async with session.request(
                 method,
                 url,
-                headers=headers,
+                headers=headers
             ) as response:
 
                 if response.status >= 400:
@@ -826,17 +1135,18 @@ async def api_request(method, endpoint, token=None):
                     logger.error(
                         "API HTTP %s: %s",
                         response.status,
-                        body[:500],
+                        body[:500]
                     )
                     return None
 
                 content_type = response.headers.get(
-                    "Content-Type",
-                    "",
+                    "Content-Type", ""
                 )
 
                 if "json" in content_type.lower():
-                    return await response.json(content_type=None)
+                    return await response.json(
+                        content_type=None
+                    )
 
                 text = await response.text()
 
@@ -845,29 +1155,37 @@ async def api_request(method, endpoint, token=None):
                 except Exception:
                     logger.error(
                         "Invalid API JSON: %s",
-                        text[:500],
+                        text[:500]
                     )
                     return None
 
     except asyncio.TimeoutError:
         logger.warning("API timeout: %s", url)
         return None
+
     except Exception as error:
         logger.error("API error: %s", error)
         return None
 
 
 async def create_mailbox():
-    return await api_request("POST", "/mailbox")
+    return await api_request(
+        "POST",
+        "/mailbox"
+    )
 
 
 async def get_messages(token):
     return await api_request(
         "GET",
         "/mailbox/messages",
-        token,
+        token
     )
 
+
+# ============================================================
+# MESSAGE PARSING
+# ============================================================
 
 def extract_messages(data):
     if not data:
@@ -880,6 +1198,7 @@ def extract_messages(data):
         return []
 
     messages = data.get("messages")
+
     if isinstance(messages, list):
         return messages
 
@@ -895,9 +1214,6 @@ def extract_messages(data):
 
     return []
 
-# ============================================================
-# MAIL PARSING
-# ============================================================
 
 def parse_sender(item):
     sender_data = (
@@ -961,76 +1277,145 @@ def parse_mail(item):
         str(body),
     )
 
+
 # ============================================================
-# EMAIL DISPLAY
+# BUILD EMAIL MESSAGE
 # ============================================================
 
-def build_mail(item, lang):
+def build_mail_message(item, lang, reward_added):
     t = TEXT[lang]
 
     sender, subject, body = parse_mail(item)
-    code = extract_code(body)
+
+    # IMPORTANT:
+    # Code is detected from BOTH subject and body.
+    # Example: "Your Code - 850055"
+    code = extract_code(
+        f"{subject}\n{body}"
+    )
 
     if code:
-        content = t["verification"].format(
-            code=safe(code),
+        # User requested the Message area to show earnings.
+        amount = EMAIL_REWARD if reward_added else 0.0
+
+        content = t["earned"].format(
+            amount=f"{amount:.5f}"
         )
-        keyboard = copy_code_keyboard(
+
+        keyboard = code_keyboard(
             code,
-            lang,
+            lang
         )
+
     else:
         content = t["message_content"].format(
-            body=safe(body[:1500]),
+            body=safe(body[:1500])
         )
-        keyboard = None
 
-    text = t["new_mail"].format(
+        keyboard = main_keyboard(lang)
+
+    message_text = t["new_mail"].format(
         sender=safe(sender),
         subject=safe(subject),
         date=safe(dhaka_time()),
         content=content,
     )
 
-    return text, keyboard, code
+    return message_text, keyboard, code
 
 
-async def send_inbox_mail(bot, user_id, item, lang):
-    text, keyboard, code = build_mail(item, lang)
+# ============================================================
+# SEND AUTOMATIC EMAIL
+# ============================================================
+
+async def send_auto_mail(
+    bot,
+    user_id,
+    item,
+    lang
+):
+    message_id = get_message_id(item)
+
+    # Reward is persistent in rewards.db.
+    # If already rewarded, reward_added=False.
+    code = extract_code(
+        f"{item.get('subject', '')}\n"
+        f"{item.get('text', '')}\n"
+        f"{item.get('body', '')}\n"
+        f"{item.get('intro', '')}\n"
+        f"{item.get('content', '')}"
+    )
+
+    reward_added = False
+
+    if code and message_id:
+        reward_added = add_email_reward(
+            user_id,
+            message_id,
+            code
+        )
+
+    message_text, keyboard, _ = build_mail_message(
+        item,
+        lang,
+        reward_added
+    )
 
     await bot.send_message(
         chat_id=user_id,
-        text=text,
+        text=message_text,
         reply_markup=keyboard,
-        parse_mode="HTML",
+        parse_mode="HTML"
     )
 
-    # Code reward: exactly once for this user + message.
-    if code:
-        message_key = get_message_id(item)
-        try:
-            added, new_balance = add_email_reward_once(
-                user_id=user_id,
-                message_key=message_key,
-                code=code,
-                amount=float(EMAIL_CODE_REWARD),
-            )
-            if added:
-                logger.info(
-                    "Code reward $%s added to user %s. Balance=%s",
-                    EMAIL_CODE_REWARD,
-                    user_id,
-                    new_balance,
-                )
-        except Exception as error:
-            logger.error(
-                "Email reward error user=%s: %s",
-                user_id,
-                error,
-            )
 
 # ============================================================
-# GENERATE
+# SEND INBOX EMAIL
+# ============================================================
+
+async def send_inbox_mail(
+    bot,
+    user_id,
+    item,
+    lang
+):
+    message_id = get_message_id(item)
+
+    code = extract_code(
+        f"{item.get('subject', '')}\n"
+        f"{item.get('text', '')}\n"
+        f"{item.get('body', '')}\n"
+        f"{item.get('intro', '')}\n"
+        f"{item.get('content', '')}"
+    )
+
+    reward_added = False
+
+    # Refresh/Inbox also goes through the same persistent
+    # reward ledger. Therefore it cannot pay twice.
+    if code and message_id:
+        reward_added = add_email_reward(
+            user_id,
+            message_id,
+            code
+        )
+
+    message_text, keyboard, _ = build_mail_message(
+        item,
+        lang,
+        reward_added
+    )
+
+    await bot.send_message(
+        chat_id=user_id,
+        text=message_text,
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
+
+# ============================================================
+# GENERATE NEW MAILBOX
 # ============================================================
 
 async def generate_new(message, user_id, lang):
@@ -1038,7 +1423,7 @@ async def generate_new(message, user_id, lang):
 
     loading = await message.reply_text(
         t["generating"],
-        parse_mode="HTML",
+        parse_mode="HTML"
     )
 
     mailbox = await create_mailbox()
@@ -1046,7 +1431,7 @@ async def generate_new(message, user_id, lang):
     if not mailbox:
         await loading.edit_text(
             t["api_error"],
-            parse_mode="HTML",
+            parse_mode="HTML"
         )
         return False
 
@@ -1072,108 +1457,36 @@ async def generate_new(message, user_id, lang):
     if not email or not token:
         logger.error(
             "Mailbox response missing email/token: %s",
-            mailbox,
+            mailbox
         )
 
         await loading.edit_text(
             t["api_error"],
-            parse_mode="HTML",
+            parse_mode="HTML"
         )
         return False
 
     save_mailbox(
         user_id,
         email,
-        token,
+        token
     )
 
     SEEN_MESSAGES[user_id] = set()
     KNOWN_MAILBOX[user_id] = token
 
+    ensure_reward_user(user_id)
+
     await loading.edit_text(
         t["created"].format(
-            email=safe(email),
+            email=safe(email)
         ),
         reply_markup=main_keyboard(lang),
-        parse_mode="HTML",
+        parse_mode="HTML"
     )
 
     return True
 
-# ============================================================
-# REFERRAL
-# ============================================================
-
-async def make_referral_link(bot, user_id):
-    me = await bot.get_me()
-    username = me.username
-
-    if not username:
-        return f"tg://user?id={user_id}"
-
-    return f"https://t.me/{username}?start={user_id}"
-
-
-async def show_refer(message, user_id, lang):
-    t = TEXT[lang]
-    count = get_referral_count(user_id)
-    link = await make_referral_link(message.get_bot(), user_id)
-
-    text = (
-        t["refer_title"]
-        + t["refer_body"].format(
-            count=count,
-            link=safe(link),
-        )
-    )
-
-    await message.reply_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=main_keyboard(lang),
-    )
-
-
-async def process_referral(user_id, payload):
-    if not payload:
-        return
-
-    try:
-        referrer_id = int(payload)
-    except (TypeError, ValueError):
-        return
-
-    if referrer_id == user_id:
-        return
-
-    try:
-        # Only the first referrer is accepted.
-        accepted = set_referrer(
-            user_id,
-            referrer_id,
-        )
-
-        if not accepted:
-            return
-
-        added, new_balance = add_referral_once(
-            referrer_id,
-            user_id,
-            float(REFERRAL_REWARD),
-        )
-
-        if added:
-            logger.info(
-                "Referral reward $%s -> %s",
-                REFERRAL_REWARD,
-                referrer_id,
-            )
-
-    except Exception as error:
-        logger.error(
-            "Referral processing error: %s",
-            error,
-        )
 
 # ============================================================
 # START
@@ -1187,18 +1500,28 @@ async def start(update, context):
 
     save_user(
         user.id,
-        user.username,
+        user.username
     )
 
-    payload = None
-    if context.args:
-        payload = context.args[0]
+    ensure_reward_user(user.id)
 
-    if payload:
-        await process_referral(
-            user.id,
-            payload,
-        )
+    # Handle /start REFERRAL_CODE
+    if context.args:
+        ref_code = str(context.args[0]).strip()
+
+        try:
+            referrer_id = int(ref_code)
+
+            if referrer_id != user.id:
+                create_referral(
+                    referrer_id,
+                    user.id
+                )
+        except Exception as error:
+            logger.warning(
+                "Referral processing error: %s",
+                error
+            )
 
     lang = get_language(user.id)
 
@@ -1206,7 +1529,7 @@ async def start(update, context):
         await update.message.reply_text(
             TEXT["en"]["welcome"],
             reply_markup=language_keyboard(),
-            parse_mode="HTML",
+            parse_mode="HTML"
         )
         return
 
@@ -1217,199 +1540,20 @@ async def start(update, context):
     if mailbox:
         await update.message.reply_text(
             TEXT[lang]["created"].format(
-                email=safe(mailbox.get("email", "")),
+                email=safe(
+                    mailbox.get("email", "")
+                )
             ),
             reply_markup=main_keyboard(lang),
-            parse_mode="HTML",
+            parse_mode="HTML"
         )
     else:
         await generate_new(
             update.message,
             user.id,
-            lang,
+            lang
         )
 
-# ============================================================
-# BALANCE
-# ============================================================
-
-async def balance_command(update, context):
-    user_id = update.effective_user.id
-    lang = user_lang(user_id)
-
-    current = get_balance(user_id)
-    referrals = get_referral_count(user_id)
-    codes = get_reward_count(user_id)
-
-    await update.message.reply_text(
-        TEXT[lang]["balance_text"].format(
-            balance=fmt_money(current),
-            referrals=referrals,
-            codes=codes,
-        ),
-        reply_markup=balance_keyboard(lang),
-        parse_mode="HTML",
-    )
-
-# ============================================================
-# WITHDRAW
-# ============================================================
-
-async def start_withdraw(query, user_id, lang):
-    current = Decimal(str(get_balance(user_id)))
-
-    if current < MIN_WITHDRAW:
-        await query.answer(
-            "Minimum withdrawal is $1.00.",
-            show_alert=True,
-        )
-        return
-
-    WITHDRAW_STATE[user_id] = {
-        "step": "binance",
-        "binance_id": None,
-    }
-
-    await query.answer()
-
-    await query.message.reply_text(
-        TEXT[lang]["send_binance"],
-        reply_markup=ReplyKeyboardMarkup(
-            [["/cancel"]],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        ),
-        parse_mode="HTML",
-    )
-
-
-async def handle_withdraw_text(update, context):
-    user = update.effective_user
-
-    if not user:
-        return
-
-    user_id = user.id
-    state = WITHDRAW_STATE.get(user_id)
-
-    if not state:
-        return
-
-    lang = user_lang(user_id)
-    value = (update.message.text or "").strip()
-
-    if value.lower() in {"/cancel", "cancel"}:
-        WITHDRAW_STATE.pop(user_id, None)
-        await update.message.reply_text(
-            TEXT[lang]["cancelled"],
-            parse_mode="HTML",
-        )
-        return
-
-    if state["step"] == "binance":
-        if not value or len(value) > 100:
-            await update.message.reply_text(
-                "❌ Please send a valid Binance ID.",
-            )
-            return
-
-        state["binance_id"] = value
-        state["step"] = "amount"
-
-        current = get_balance(user_id)
-
-        await update.message.reply_text(
-            TEXT[lang]["send_amount"].format(
-                balance=fmt_money(current),
-            ),
-            parse_mode="HTML",
-        )
-        return
-
-    if state["step"] == "amount":
-        try:
-            amount = Decimal(value.replace("$", "").strip())
-        except Exception:
-            await update.message.reply_text(
-                TEXT[lang]["invalid_amount"],
-                parse_mode="HTML",
-            )
-            return
-
-        if amount < MIN_WITHDRAW:
-            await update.message.reply_text(
-                TEXT[lang]["min_withdraw"],
-                parse_mode="HTML",
-            )
-            return
-
-        current = Decimal(str(get_balance(user_id)))
-
-        if amount > current:
-            await update.message.reply_text(
-                TEXT[lang]["insufficient"],
-                parse_mode="HTML",
-            )
-            return
-
-        try:
-            withdrawal_id = create_withdrawal(
-                user_id=user_id,
-                binance_id=state["binance_id"],
-                amount=float(amount),
-            )
-        except Exception as error:
-            logger.error(
-                "Withdrawal error user=%s: %s",
-                user_id,
-                error,
-            )
-            withdrawal_id = None
-
-        if not withdrawal_id:
-            await update.message.reply_text(
-                TEXT[lang]["withdraw_failed"],
-                parse_mode="HTML",
-            )
-            return
-
-        WITHDRAW_STATE.pop(user_id, None)
-
-        remaining = get_balance(user_id)
-
-        # Notify configured admins about the withdrawal request.
-        admin_notice = (
-            "💸 <b>NEW WITHDRAWAL REQUEST</b>\n\n"
-            f"👤 User ID: <code>{user_id}</code>\n"
-            f"💰 Amount: <b>${fmt_money(amount)}</b>\n"
-            f"🆔 Binance ID: <code>{safe(state['binance_id'])}</code>\n"
-            f"🧾 Request ID: <code>{withdrawal_id}</code>\n"
-            f"💵 Remaining Balance: <b>${fmt_money(remaining)}</b>"
-        )
-
-        for admin_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(
-                    chat_id=admin_id,
-                    text=admin_notice,
-                    parse_mode="HTML",
-                )
-            except Exception as error:
-                logger.error(
-                    "Admin withdrawal notification failed admin=%s: %s",
-                    admin_id,
-                    error,
-                )
-
-        await update.message.reply_text(
-            TEXT[lang]["withdraw_success"].format(
-                amount=fmt_money(amount),
-                binance=safe(state["binance_id"]),
-                balance=fmt_money(remaining),
-            ),
-            reply_markup=main_keyboard(lang),
-            parse_mode="HTML",
-        )
 
 # ============================================================
 # INBOX
@@ -1424,24 +1568,23 @@ async def show_inbox(message, user_id, lang):
         await message.reply_text(
             t["no_mailbox"],
             reply_markup=main_keyboard(lang),
-            parse_mode="HTML",
+            parse_mode="HTML"
         )
         return
 
     loading = await message.reply_text(
         t["checking"],
-        parse_mode="HTML",
+        parse_mode="HTML"
     )
 
     data = await get_messages(
-        mailbox.get("token"),
+        mailbox.get("token")
     )
 
     if not data:
         await loading.edit_text(
             t["api_error"],
-            reply_markup=main_keyboard(lang),
-            parse_mode="HTML",
+            parse_mode="HTML"
         )
         return
 
@@ -1451,7 +1594,7 @@ async def show_inbox(message, user_id, lang):
         await loading.edit_text(
             t["empty"],
             reply_markup=main_keyboard(lang),
-            parse_mode="HTML",
+            parse_mode="HTML"
         )
         return
 
@@ -1460,6 +1603,7 @@ async def show_inbox(message, user_id, lang):
     except Exception:
         pass
 
+    # Latest first
     messages = list(reversed(messages))
 
     for item in messages[:MAX_MESSAGES]:
@@ -1468,19 +1612,17 @@ async def show_inbox(message, user_id, lang):
                 message.get_bot(),
                 user_id,
                 item,
-                lang,
+                lang
             )
         except Exception as error:
             logger.error(
                 "Inbox message error: %s",
-                error,
+                error
             )
 
-    await message.reply_text(
-        t["inbox_footer"],
-        reply_markup=main_keyboard(lang),
-        parse_mode="HTML",
-    )
+    # Do NOT send an extra Inbox footer here.
+    # Each email already has its own buttons.
+
 
 # ============================================================
 # COMMANDS
@@ -1488,28 +1630,23 @@ async def show_inbox(message, user_id, lang):
 
 async def refresh_command(update, context):
     user_id = update.effective_user.id
+    lang = user_lang(user_id)
+
     await show_inbox(
         update.message,
         user_id,
-        user_lang(user_id),
+        lang
     )
 
 
 async def inbox_command(update, context):
     user_id = update.effective_user.id
+    lang = user_lang(user_id)
+
     await show_inbox(
         update.message,
         user_id,
-        user_lang(user_id),
-    )
-
-
-async def refer_command(update, context):
-    user_id = update.effective_user.id
-    await show_refer(
-        update.message,
-        user_id,
-        user_lang(user_id),
+        lang
     )
 
 
@@ -1518,12 +1655,9 @@ async def language_command(update, context):
     lang = user_lang(user_id)
 
     await update.message.reply_text(
-        TEXT[lang].get(
-            "language",
-            "🌐 Select your language:",
-        ),
+        TEXT[lang]["language"],
         reply_markup=language_keyboard(),
-        parse_mode="HTML",
+        parse_mode="HTML"
     )
 
 
@@ -1534,7 +1668,7 @@ async def help_command(update, context):
     await update.message.reply_text(
         TEXT[lang]["help"],
         reply_markup=main_keyboard(lang),
-        parse_mode="HTML",
+        parse_mode="HTML"
     )
 
 
@@ -1544,114 +1678,194 @@ async def about_command(update, context):
 
     await update.message.reply_text(
         TEXT[lang]["about"],
-        parse_mode="HTML",
+        parse_mode="HTML"
     )
 
 
-async def stats_command(update, context):
+# ============================================================
+# REFER
+# ============================================================
+
+async def refer_command(update, context):
     user_id = update.effective_user.id
     lang = user_lang(user_id)
+
+    ensure_reward_user(user_id)
 
     try:
-        users = get_all_users()
-        total_users = len(users)
+        bot_username = context.bot.username
 
-        total_mailboxes = 0
+        if not bot_username:
+            me = await context.bot.get_me()
+            bot_username = me.username
 
-        for uid in users:
-            try:
-                if get_mailbox(uid):
-                    total_mailboxes += 1
-            except Exception:
-                pass
+        link = (
+            f"https://t.me/{bot_username}"
+            f"?start={user_id}"
+        )
+
+        refs = get_total_referrals(user_id)
+
+        await update.message.reply_text(
+            TEXT[lang]["refer"].format(
+                reward=f"{REFERRAL_REWARD:.5f}",
+                refs=refs,
+                link=safe(link)
+            ),
+            parse_mode="HTML"
+        )
 
     except Exception as error:
-        logger.error("Stats error: %s", error)
-        total_users = 0
-        total_mailboxes = 0
+        logger.error(
+            "Refer error: %s",
+            error
+        )
 
-    await update.message.reply_text(
-        TEXT[lang]["stats"].format(
-            users=total_users,
-            mailboxes=total_mailboxes,
-            seconds=POLL_SECONDS,
-        ),
-        parse_mode="HTML",
-    )
+        await update.message.reply_text(
+            TEXT[lang]["api_error"],
+            parse_mode="HTML"
+        )
+
 
 # ============================================================
-# ADMIN
+# BALANCE
 # ============================================================
 
-async def admin_only(update):
+async def balance_command(update, context):
     user_id = update.effective_user.id
     lang = user_lang(user_id)
 
+    balance = get_balance(user_id)
+    refs = get_total_referrals(user_id)
+
     await update.message.reply_text(
-        TEXT[lang]["admin_only"],
-        parse_mode="HTML",
+        TEXT[lang]["balance"].format(
+            balance=f"{balance:.5f}",
+            refs=refs,
+            email_reward=f"{EMAIL_REWARD:.5f}",
+        ),
+        reply_markup=balance_keyboard(lang),
+        parse_mode="HTML"
     )
 
 
-async def admin_command(update, context):
-    if not is_admin(update.effective_user.id):
-        await admin_only(update)
-        return
+# ============================================================
+# WITHDRAW STATE
+# ============================================================
 
-    lang = user_lang(update.effective_user.id)
+async def withdraw_callback(update, context):
+    query = update.callback_query
+    user_id = query.from_user.id
+    lang = user_lang(user_id)
 
-    await update.message.reply_text(
-        TEXT[lang]["admin_panel"],
-        parse_mode="HTML",
-    )
+    await query.answer()
 
+    amount = float(get_balance(user_id))
 
-async def broadcast_command(update, context):
-    if not is_admin(update.effective_user.id):
-        await admin_only(update)
-        return
-
-    lang = user_lang(update.effective_user.id)
-
-    if not context.args:
-        await update.message.reply_text(
-            TEXT[lang]["broadcast_start"],
+    if amount < 1.00:
+        await query.message.reply_text(
+            "❌ <b>Minimum Withdraw is $1.00</b>\n\n"
+            f"💵 Your current balance: <b>${amount:.5f}</b>\n"
+            "You cannot withdraw until your balance reaches $1.00.",
             parse_mode="HTML",
+            reply_markup=main_keyboard(lang),
         )
         return
 
-    broadcast_text = " ".join(context.args)
-    users = get_all_users()
+    context.user_data["waiting_binance_id"] = True
 
-    sent = 0
-    failed = 0
-
-    for user_id in users:
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=broadcast_text,
-                parse_mode="HTML",
-            )
-            sent += 1
-            await asyncio.sleep(0.05)
-        except Exception:
-            failed += 1
-
-    await update.message.reply_text(
-        TEXT[lang]["broadcast_done"].format(
-            sent=sent,
-            failed=failed,
-        ),
+    await query.message.reply_text(
+        TEXT[lang]["withdraw_prompt"],
         parse_mode="HTML",
+        reply_markup=main_keyboard(lang),
     )
 
+
+async def text_handler(update, context):
+    """
+    Handles the persistent bottom keyboard and Binance ID input.
+    """
+    user = update.effective_user
+
+    if not user or not update.message:
+        return
+
+    lang = user_lang(user.id)
+    message_text = (update.message.text or "").strip()
+
+    # Binance ID input after Withdraw.
+    if context.user_data.get("waiting_binance_id"):
+        binance_id = message_text
+
+        if not binance_id or len(binance_id) > 100:
+            await update.message.reply_text(
+                TEXT[lang]["withdraw_invalid"],
+                parse_mode="HTML",
+                reply_markup=main_keyboard(lang),
+            )
+            return
+
+        amount = float(get_balance(user.id))
+
+        # Minimum withdrawal is $1.00.
+        if amount < 1.00:
+            context.user_data["waiting_binance_id"] = False
+            await update.message.reply_text(
+                "❌ <b>Minimum Withdraw is $1.00</b>\n\n"
+                f"💵 Your current balance: <b>${amount:.5f}</b>\n"
+                "You cannot withdraw until your balance reaches $1.00.",
+                parse_mode="HTML",
+                reply_markup=main_keyboard(lang),
+            )
+            return
+
+        success = create_withdraw_request(
+            user.id,
+            binance_id,
+            amount
+        )
+
+        context.user_data["waiting_binance_id"] = False
+
+        if not success:
+            await update.message.reply_text(
+                "❌ Withdrawal could not be created. Please try again.",
+                parse_mode="HTML",
+                reply_markup=main_keyboard(lang),
+            )
+            return
+
+        await update.message.reply_text(
+            TEXT[lang]["withdraw_recorded"].format(
+                amount=f"{amount:.5f}",
+                binance_id=safe(binance_id),
+            ),
+            parse_mode="HTML",
+            reply_markup=main_keyboard(lang),
+        )
+        return
+
+    # Persistent buttons under the Telegram text box.
+    if message_text == "➕ Generate New":
+        await generate_new(update.message, user.id, lang)
+        return
+
+    if message_text == "🔄 Refresh":
+        await show_inbox(update.message, user.id, lang)
+        return
+
+    if message_text == "👥 Refer System":
+        await refer_command(update, context)
+        return
+
+
 # ============================================================
-# CALLBACK
+# CALLBACK HANDLER
 # ============================================================
 
 async def callback_handler(update, context):
     query = update.callback_query
+
     user_id = query.from_user.id
     data = query.data or ""
 
@@ -1660,7 +1874,10 @@ async def callback_handler(update, context):
     # --------------------------------------------------------
 
     if data.startswith("lang_"):
-        lang = data.replace("lang_", "")
+        lang = data.replace(
+            "lang_",
+            ""
+        )
 
         if lang not in TEXT:
             lang = "en"
@@ -1669,13 +1886,15 @@ async def callback_handler(update, context):
 
         set_language(
             user_id,
-            lang,
+            lang
         )
+
+        ensure_reward_user(user_id)
 
         try:
             await query.edit_message_text(
                 TEXT[lang]["language_ok"],
-                parse_mode="HTML",
+                parse_mode="HTML"
             )
         except Exception:
             pass
@@ -1683,8 +1902,9 @@ async def callback_handler(update, context):
         await generate_new(
             query.message,
             user_id,
-            lang,
+            lang
         )
+
         return
 
     # --------------------------------------------------------
@@ -1699,7 +1919,23 @@ async def callback_handler(update, context):
         await generate_new(
             query.message,
             user_id,
-            lang,
+            lang
+        )
+        return
+
+    # --------------------------------------------------------
+    # INBOX
+    # --------------------------------------------------------
+
+    if data == "inbox":
+        await query.answer()
+
+        lang = user_lang(user_id)
+
+        await show_inbox(
+            query.message,
+            user_id,
+            lang
         )
         return
 
@@ -1715,44 +1951,7 @@ async def callback_handler(update, context):
         await show_inbox(
             query.message,
             user_id,
-            lang,
-        )
-        return
-
-    # --------------------------------------------------------
-    # REFER
-    # --------------------------------------------------------
-
-    if data == "refer":
-        await query.answer()
-
-        await show_refer(
-            query.message,
-            user_id,
-            user_lang(user_id),
-        )
-        return
-
-    # --------------------------------------------------------
-    # BALANCE
-    # --------------------------------------------------------
-
-    if data == "balance":
-        await query.answer()
-
-        lang = user_lang(user_id)
-        current = get_balance(user_id)
-        referrals = get_referral_count(user_id)
-        codes = get_reward_count(user_id)
-
-        await query.message.reply_text(
-            TEXT[lang]["balance_text"].format(
-                balance=fmt_money(current),
-                referrals=referrals,
-                codes=codes,
-            ),
-            reply_markup=balance_keyboard(lang),
-            parse_mode="HTML",
+            lang
         )
         return
 
@@ -1761,17 +1960,137 @@ async def callback_handler(update, context):
     # --------------------------------------------------------
 
     if data == "withdraw":
-        await start_withdraw(
-            query,
-            user_id,
-            user_lang(user_id),
+        await withdraw_callback(
+            update,
+            context
         )
         return
 
     await query.answer()
 
+
 # ============================================================
-# AUTO INBOX
+# STATS
+# ============================================================
+
+async def stats_command(update, context):
+    user_id = update.effective_user.id
+    lang = user_lang(user_id)
+
+    try:
+        users = get_all_users()
+        total_users = len(users)
+
+        total_mailboxes = 0
+
+        for uid in users:
+            try:
+                mailbox = get_mailbox(uid)
+
+                if mailbox:
+                    total_mailboxes += 1
+            except Exception:
+                continue
+
+    except Exception as error:
+        logger.error(
+            "Stats error: %s",
+            error
+        )
+
+        total_users = 0
+        total_mailboxes = 0
+
+    await update.message.reply_text(
+        TEXT[lang]["stats"].format(
+            users=total_users,
+            mailboxes=total_mailboxes,
+            seconds=POLL_SECONDS
+        ),
+        parse_mode="HTML"
+    )
+
+
+# ============================================================
+# ADMIN
+# ============================================================
+
+async def admin_only(update):
+    user_id = update.effective_user.id
+    lang = user_lang(user_id)
+
+    await update.message.reply_text(
+        TEXT[lang]["admin_only"],
+        parse_mode="HTML"
+    )
+
+
+async def admin_command(update, context):
+    if not is_admin(update.effective_user.id):
+        await admin_only(update)
+        return
+
+    lang = user_lang(
+        update.effective_user.id
+    )
+
+    await update.message.reply_text(
+        TEXT[lang]["admin_panel"],
+        parse_mode="HTML"
+    )
+
+
+async def broadcast_command(update, context):
+    if not is_admin(update.effective_user.id):
+        await admin_only(update)
+        return
+
+    lang = user_lang(
+        update.effective_user.id
+    )
+
+    if not context.args:
+        await update.message.reply_text(
+            TEXT[lang]["broadcast_start"],
+            parse_mode="HTML"
+        )
+        return
+
+    broadcast_text = " ".join(
+        context.args
+    )
+
+    users = get_all_users()
+
+    sent = 0
+    failed = 0
+
+    for user_id in users:
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=broadcast_text,
+                parse_mode="HTML"
+            )
+
+            sent += 1
+
+            await asyncio.sleep(0.05)
+
+        except Exception:
+            failed += 1
+
+    await update.message.reply_text(
+        TEXT[lang]["broadcast_done"].format(
+            sent=sent,
+            failed=failed
+        ),
+        parse_mode="HTML"
+    )
+
+
+# ============================================================
+# AUTOMATIC INBOX
 # ============================================================
 
 async def auto_inbox_job(context):
@@ -1780,7 +2099,7 @@ async def auto_inbox_job(context):
     except Exception as error:
         logger.error(
             "Could not load users: %s",
-            error,
+            error
         )
         return
 
@@ -1812,7 +2131,7 @@ async def auto_inbox_job(context):
 
             seen = SEEN_MESSAGES.setdefault(
                 user_id,
-                set(),
+                set()
             )
 
             lang = user_lang(user_id)
@@ -1826,27 +2145,27 @@ async def auto_inbox_job(context):
                 if message_id in seen:
                     continue
 
-                # Mark before sending to prevent duplicate auto-send.
+                # Mark it in memory immediately.
                 seen.add(message_id)
 
                 try:
-                    await send_inbox_mail(
+                    await send_auto_mail(
                         context.bot,
                         user_id,
                         item,
-                        lang,
+                        lang
                     )
 
                     logger.info(
                         "📩 New email sent automatically -> %s",
-                        user_id,
+                        user_id
                     )
 
                 except Exception as error:
                     logger.error(
                         "Auto send error user=%s: %s",
                         user_id,
-                        error,
+                        error
                     )
 
             if len(seen) > 200:
@@ -1858,10 +2177,11 @@ async def auto_inbox_job(context):
             logger.error(
                 "Auto inbox error user=%s: %s",
                 user_id,
-                error,
+                error
             )
 
         await asyncio.sleep(0.05)
+
 
 # ============================================================
 # ERROR
@@ -1870,32 +2190,40 @@ async def auto_inbox_job(context):
 async def error_handler(update, context):
     logger.error(
         "Unhandled error",
-        exc_info=context.error,
+        exc_info=context.error
     )
+
 
 # ============================================================
 # POST INIT
 # ============================================================
 
 async def post_init(application):
+    init_reward_db()
+
     if not application.job_queue:
         logger.error(
-            "JobQueue unavailable. Install: "
-            "python-telegram-bot[job-queue]"
+            "JobQueue unavailable."
         )
+
+        logger.error(
+            "Install: python-telegram-bot[job-queue]"
+        )
+
         return
 
     application.job_queue.run_repeating(
         auto_inbox_job,
         interval=POLL_SECONDS,
         first=2,
-        name="auto-inbox",
+        name="auto-inbox"
     )
 
     logger.info(
         "📩 Automatic inbox started: every %s seconds",
-        POLL_SECONDS,
+        POLL_SECONDS
     )
+
 
 # ============================================================
 # MAIN
@@ -1903,6 +2231,7 @@ async def post_init(application):
 
 def main():
     init_db()
+    init_reward_db()
 
     application = (
         Application.builder()
@@ -1915,96 +2244,85 @@ def main():
     application.add_handler(
         CommandHandler("start", start)
     )
+
     application.add_handler(
         CommandHandler("inbox", inbox_command)
     )
+
     application.add_handler(
         CommandHandler("refresh", refresh_command)
     )
-    application.add_handler(
-        CommandHandler("refer", refer_command)
-    )
-    application.add_handler(
-        CommandHandler("balance", balance_command)
-    )
+
     application.add_handler(
         CommandHandler("language", language_command)
     )
+
     application.add_handler(
         CommandHandler("help", help_command)
     )
+
     application.add_handler(
         CommandHandler("about", about_command)
     )
+
     application.add_handler(
         CommandHandler("stats", stats_command)
+    )
+
+    application.add_handler(
+        CommandHandler("refer", refer_command)
+    )
+
+    application.add_handler(
+        CommandHandler("balance", balance_command)
     )
 
     # Admin commands
     application.add_handler(
         CommandHandler("admin", admin_command)
     )
+
     application.add_handler(
         CommandHandler("broadcast", broadcast_command)
     )
+
     application.add_handler(
         CommandHandler("boardchat", broadcast_command)
     )
 
-    # Buttons
+    # Callback buttons
     application.add_handler(
         CallbackQueryHandler(callback_handler)
     )
 
-    # Main ReplyKeyboard buttons.
-    # This is intentionally before the generic text handler so
-    # Generate/Refresh/Refer/Withdraw are treated as buttons.
-    application.add_handler(
-        MessageHandler(
-            filters.TEXT
-            & ~filters.COMMAND
-            & filters.Regex(
-                r"^(?:"
-                + "|".join(
-                    re.escape(label)
-                    for label in sorted(
-                        {
-                            TEXT[lang][key]
-                            for lang in TEXT
-                            for key in (
-                                "generate",
-                                "refresh",
-                                "refer",
-                                "withdraw",
-                            )
-                        },
-                        key=len,
-                        reverse=True,
-                    )
-                )
-                + r")$"
-            ),
-            main_button_handler,
-        )
-    )
+    # Binance ID input
+    # Command handlers/callbacks are processed before this.
+    from telegram.ext import MessageHandler, filters
 
-    # Withdraw text input
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
-            handle_withdraw_text,
+            text_handler
         )
     )
 
-    application.add_error_handler(error_handler)
+    application.add_error_handler(
+        error_handler
+    )
 
     print("🤖 Temp Mail Bot is running...")
-    print(f"📩 Auto inbox: every {POLL_SECONDS}s")
+    print(
+        f"📩 Auto inbox: every {POLL_SECONDS}s"
+    )
 
     application.run_polling(
         drop_pending_updates=True
     )
 
+
+# ============================================================
+# RUN
+# ============================================================
 
 if __name__ == "__main__":
     main()
