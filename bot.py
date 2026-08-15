@@ -516,7 +516,7 @@ TEXT = {
         "verification": "🔐 <b>VERIFICATION CODE</b>\n\n🔢 <b>Code:</b> <code>{code}</code>",
         "copy_code": "📋 Copy Code",
         "language": "🌐 <b>Select your language:</b>",
-        "help": "📚 <b>HELP</b>\n\n➕ Generate New — Create email\n📥 Inbox — View emails\n🔄 Refresh — Check emails\n👥 Refer System — Refer & earn\n💰 /balance — Check balance\n💸 /withdraw — Withdraw\n\n/start — Start\n/language — Language\n/inbox — Inbox\n/refresh — Refresh\n/help — Help\n/about — About\n/stats — Statistics",
+        "help": "📚 <b>HELP</b>\n\n➕ Generate New — Create email\n📥 Inbox — View emails\n🔄 Refresh — Check emails\n👥 Refer System — Refer & earn\n💰 /balance — Check balance\n💸 /withdraw — Withdraw\n\n/start — Start\n/language — Language\n/inbox — Inbox\n/refresh — Refresh\n/help — Help\n/stats — Statistics",
         "about": "📧 <b>TEMP MAIL</b>\n\nFast disposable email receiver.\n\n⚡ Powered by Smails API\n🔒 No API key required",
         "stats": "📊 <b>BOT STATS</b>\n\n👥 Total Users: <b>{users}</b>\n📧 Active Mailboxes: <b>{mailboxes}</b>\n⚡ Auto Inbox: <b>ON</b>\n🔄 Polling: <b>{seconds}s</b>",
         "admin_only": "🔐 <b>ADMIN ONLY</b>\n\nThis command is available only for administrators.",
