@@ -1500,25 +1500,30 @@ def main():
         .build()
     )
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("inbox", inbox_command))
-    application.add_handler(CommandHandler("refresh", refresh_command))
-    application.add_handler(CommandHandler("language", language_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("about", about_command))
-    application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(CommandHandler("refer", refer_command))
-    application.add_handler(CommandHandler("balance", balance_command))
-    application.add_handler(CommandHandler("admin", admin_command))
-    application.add_handler(CommandHandler("broadcast", broadcast_command))
-    application.add_handler(CommandHandler("boardchat", broadcast_command))
-    application.add_handler(CallbackQueryHandler(callback_handler))
-    application.add_handler(
-        MessageHandler(filters.TEXT & \~filters.COMMAND, text_handler)
-    )
-    application.add_error_handler(error_handler)
-    print("🤖 Temp Mail Bot is running...")
-    print(f"📩 Auto inbox: every {POLL_SECONDS}s")
-    application.run_polling(drop_pending_updates=True)
+application.add_handler(CommandHandler("inbox", inbox_command))
+application.add_handler(CommandHandler("refresh", refresh_command))
+application.add_handler(CommandHandler("language", language_command))
+application.add_handler(CommandHandler("help", help_command))
+application.add_handler(CommandHandler("about", about_command))
+application.add_handler(CommandHandler("stats", stats_command))
+application.add_handler(CommandHandler("refer", refer_command))
+application.add_handler(CommandHandler("balance", balance_command))
+application.add_handler(CommandHandler("admin", admin_command))
+application.add_handler(CommandHandler("broadcast", broadcast_command))
+application.add_handler(CommandHandler("boardchat", broadcast_command))
+
+application.add_handler(CallbackQueryHandler(callback_handler))
+
+application.add_handler(
+    MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler)
+)
+
+application.add_error_handler(error_handler)
+
+print("🤖 Temp Mail Bot is running...")
+print(f"📩 Auto inbox: every {POLL_SECONDS}s")
+
+application.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
