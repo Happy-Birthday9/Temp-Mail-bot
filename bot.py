@@ -72,7 +72,7 @@ REFERRAL_REWARD = 500
 
 MIN_WITHDRAW = 1.00
 
-World_TZ = ZoneInfo("Asia/Dhaka")
+DHAKA_TZ = ZoneInfo("Asia/Dhaka")
 
 REWARD_DB = "rewards.db"
 
