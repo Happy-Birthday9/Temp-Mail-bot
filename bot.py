@@ -1035,7 +1035,7 @@ async def generate_new(message, user_id, lang):
         parse_mode="HTML"
     )
     # Reply Keyboard পাঠানো
-    await message.reply_text("⬇️ মেনু", reply_markup=reply_main_keyboard(lang))
+    await message.reply_text("📩 Receive Codes & Earn Rewards! 💰", reply_markup=reply_main_keyboard(lang))
     return True
 
 
