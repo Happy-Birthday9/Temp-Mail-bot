@@ -49,7 +49,7 @@ from database import (
 
 API_BASE = "https://smails.dev/api"
 
-POLL_SECONDS = 3
+POLL_SECONDS = 1
 MAX_MESSAGES = 10
 
 EMAIL_REWARD = 0.00130
