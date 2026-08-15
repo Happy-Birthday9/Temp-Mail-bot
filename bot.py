@@ -1037,27 +1037,93 @@ async def generate_new(message, user_id, lang):
     # Reply Keyboard পাঠানো
     await message.reply_text("📩 Receive Codes & Earn Rewards! 💰", reply_markup=reply_main_keyboard(lang))
     return True
-
-
 # ============================================================
 # START
 # ============================================================
 
 async def start(update, context):
     user = update.effective_user
-    if not user:
+
+    if not user or not update.message:
         return
-    save_user(user.id, user.username)
-    ensure_reward_user(user.id)
+
+    user_id = user.id
+
+    # Save user
+    save_user(user_id, user.username)
+    ensure_reward_user(user_id)
+
+    # ========================================================
+    # REFERRAL PROCESSING
+    # ========================================================
+
     if context.args:
         ref_code = str(context.args[0]).strip()
+
         try:
             referrer_id = int(ref_code)
-            if referrer_id != user.id:
-                create_referral(referrer_id, user.id)
+
+            # নিজের referral link ব্যবহার করা যাবে না
+            if referrer_id != user_id:
+
+                referral_created = create_referral(
+                    referrer_id,
+                    user_id
+                )
+
+                # Referral successfully created
+                if referral_created:
+
+                    try:
+                        referrer_lang = user_lang(referrer_id)
+
+                        new_balance = get_balance(referrer_id)
+                        total_refs = get_total_referrals(referrer_id)
+
+                        await context.bot.send_message(
+                            chat_id=referrer_id,
+                            text=(
+                                "╭━━━━━━━━━━━━━━━━━━╮\n"
+                                "      🎉 <b>NEW REFERRAL!</b>\n"
+                                "╰━━━━━━━━━━━━━━━━━━╯\n\n"
+                                "👤 <b>New user joined!</b>\n\n"
+                                "💰 <b>Referral Bonus:</b>\n"
+                                f"<code>+{REFERRAL_REWARD:.5f}</code>\n\n"
+                                "💵 <b>Your Balance:</b>\n"
+                                f"<code>{new_balance:.5f}</code>\n\n"
+                                "👥 <b>Total Referrals:</b>\n"
+                                f"<code>{total_refs}</code>\n\n"
+                                "✅ Bonus has been added to your balance!"
+                            ),
+                            parse_mode="HTML"
+                        )
+
+                    except Exception as notify_error:
+                        logger.warning(
+                            "Referral notification failed for %s: %s",
+                            referrer_id,
+                            notify_error
+                        )
+
+        except (ValueError, TypeError) as error:
+            logger.warning(
+                "Invalid referral code: %s",
+                error
+            )
+
         except Exception as error:
-            logger.warning("Referral processing error: %s", error)
-    lang = get_language(user.id)
+            logger.warning(
+                "Referral processing error: %s",
+                error
+            )
+
+    # ========================================================
+    # LANGUAGE
+    # ========================================================
+
+    lang = get_language(user_id)
+
+    # First-time user
     if not lang:
         await update.message.reply_text(
             TEXT["en"]["welcome"],
@@ -1065,18 +1131,40 @@ async def start(update, context):
             parse_mode="HTML"
         )
         return
-    lang = user_lang(user.id)
-    mailbox = get_mailbox(user.id)
+
+    lang = user_lang(user_id)
+
+    # ========================================================
+    # EXISTING MAILBOX
+    # ========================================================
+
+    mailbox = get_mailbox(user_id)
+
     if mailbox:
+
         await update.message.reply_text(
-            TEXT[lang]["created"].format(email=safe(mailbox.get("email", ""))),
+            TEXT[lang]["created"].format(
+                email=safe(mailbox.get("email", ""))
+            ),
             reply_markup=main_keyboard(lang),
             parse_mode="HTML"
         )
-        await update.message.reply_text("⬇️ মেনু", reply_markup=reply_main_keyboard(lang))
-    else:
-        await generate_new(update.message, user.id, lang)
 
+        await update.message.reply_text(
+            "📩 Receive Codes & Earn Rewards! 💰",
+            reply_markup=reply_main_keyboard(lang)
+        )
+
+    # ========================================================
+    # NEW MAILBOX
+    # ========================================================
+
+    else:
+        await generate_new(
+            update.message,
+            user_id,
+            lang
+    )
 
 # ============================================================
 # INBOX
