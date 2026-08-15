@@ -2078,6 +2078,16 @@ async def callback_handler(update, context):
 
 async def stats_command(update, context):
     user_id = update.effective_user.id
+
+    # Admin only
+    if not is_admin(user_id):
+        await update.message.reply_text(
+            "🚫 <b>Access Denied!</b>\n\n"
+            "⚠️ This command is available for administrators only.",
+            parse_mode="HTML",
+        )
+        return
+
     lang = user_lang(user_id)
 
     try:
@@ -2088,18 +2098,13 @@ async def stats_command(update, context):
         for uid in users:
             try:
                 mailbox = get_mailbox(uid)
-
                 if mailbox:
                     total_mailboxes += 1
-
             except Exception:
                 continue
 
     except Exception as error:
-        logger.error(
-            "Stats error: %s",
-            error,
-        )
+        logger.error("Stats error: %s", error)
         total_users = 0
         total_mailboxes = 0
 
@@ -2110,8 +2115,7 @@ async def stats_command(update, context):
             seconds=POLL_SECONDS,
         ),
         parse_mode="HTML",
-    )
-
+                )
 # ============================================================
 # ADMIN
 # ============================================================
