@@ -58,9 +58,9 @@ from database import (
 API_BASE = "https://smails.dev/api"
 
 POLL_SECONDS = 1
-MAX_MESSAGES = 10
+MAX_MESSAGES = 3
 
-EMAIL_REWARD = 0.00130
+EMAIL_REWARD = 1
 REFERRAL_REWARD = 0.00158
 
 MIN_WITHDRAW = 1.00
@@ -2393,13 +2393,12 @@ def main():
     )
 
     # Text
-    application.add_handler(
-        MessageHandler(
-            filters.TEXT & \~filters.COMMAND,
-            text_handler,
-        )
+application.add_handler(
+    MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        text_handler,
     )
-
+)
     application.add_error_handler(
         error_handler
     )
