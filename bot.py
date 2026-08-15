@@ -72,13 +72,13 @@ REFERRAL_REWARD = 500
 
 MIN_WITHDRAW = 1.00
 
-DHAKA_TZ = ZoneInfo("Asia/Dhaka")
+datetime.now(TIME_ZONE)
 
 REWARD_DB = "rewards.db"
 
 
 # ============================================================
-# LOGGING
+# LOGG
 # ============================================================
 
 logging.basicConfig(
