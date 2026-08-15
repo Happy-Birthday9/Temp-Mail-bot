@@ -1399,6 +1399,16 @@ async def help_command(update, context):
 
 async def about_command(update, context):
     user_id = update.effective_user.id
+
+    # Admin only
+    if not is_admin(user_id):
+        await update.message.reply_text(
+            "🚫 <b>Access Denied!</b>\n\n"
+            "⚠️ This command is available for administrators only.",
+            parse_mode="HTML",
+        )
+        return
+
     lang = user_lang(user_id)
 
     await update.message.reply_text(
