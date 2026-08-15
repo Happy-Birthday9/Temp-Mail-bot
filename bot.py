@@ -2393,12 +2393,14 @@ def main():
     )
 
     # Text
-application.add_handler(
-    MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        text_handler,
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            text_handler,
+        )
     )
-)
+
+    # Error handler
     application.add_error_handler(
         error_handler
     )
