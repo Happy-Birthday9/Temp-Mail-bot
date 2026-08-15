@@ -487,7 +487,7 @@ TEXT = {
         "generating": "⚡ <b>Creating your temporary email...</b>",
         "created": (
             "╭━━━━━━━━━━━━━━━━━━╮\n"
-            "   📧 NEW TEMP EMAIL\n"
+            "   📧 G NEW TEMP EMAIL\n"
             "╰━━━━━━━━━━━━━━━━━━╯\n\n"
             "📮 <b>Email:</b>\n<code>{email}</code>\n\n"
             "🟢 <b>Status:</b> Active\n\n"
