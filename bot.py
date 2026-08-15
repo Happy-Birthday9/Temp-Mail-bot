@@ -777,7 +777,7 @@ TEXT = {
             "🌐 <b>Source:</b> Email\n"
             "👤 <b>From:</b> {sender}\n"
             "📌 <b>Subject:</b> {subject}\n"
-            "🕐 <b>Dhaka Time:</b> {date}\n\n"
+            "🕐 <b>UTC Time:</b> {date}\n\n"
             "{content}",
 
         "earned":
@@ -1020,7 +1020,7 @@ TEXT = {
             "🌐 <b>Source:</b> Email\n"
             "👤 <b>From:</b> {sender}\n"
             "📌 <b>Subject:</b> {subject}\n"
-            "🕐 <b>ঢাকা সময়:</b> {date}\n\n"
+            "🕐 <b>UTC সময়:</b> {date}\n\n"
             "{content}",
 
         "earned":
@@ -1263,7 +1263,7 @@ TEXT = {
             "🌐 <b>Source:</b> Email\n"
             "👤 <b>From:</b> {sender}\n"
             "📌 <b>Subject:</b> {subject}\n"
-            "🕐 <b>Dhaka Time:</b> {date}\n\n"
+            "🕐 <b>UTC Time:</b> {date}\n\n"
             "{content}",
 
         "earned":
