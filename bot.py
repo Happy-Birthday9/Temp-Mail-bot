@@ -1458,11 +1458,7 @@ REJECTION_REASONS = {
         "may be taken.",
 
     "hi":
-        "⚠️ चेतावनी: आपके अकाउंट में असामान्य गतिविधि "
-        "पाई गई है। स्वचालित या दुरुपयोग वाले कोड रिक्वेस्ट "
-        "के कारण आपके बैलेंस की समीक्षा या समायोजन किया जा "
-        "सकता है। कृपया इस गतिविधि को बंद करें, अन्यथा "
-        "आगे की कार्रवाई की जा सकती है।",
+        "⚠️ Chetawani: Aapke account mein asamanya activity pai gayi hai. Automatic ya misuse wale code request ki wajah se aapke balance ki review ya adjustment kiya ja sakta hai. Kripya is activity ko band karein, warna aage karwai ki ja sakti hai",
 }
 
 
