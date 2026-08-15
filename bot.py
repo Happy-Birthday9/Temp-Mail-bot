@@ -263,22 +263,38 @@ def create_referral(referrer_id, referred_user_id):
         conn.close()
 
 
-def create_withdraw_request(user_id, binance_id, amount):
+def create_withdraw_request(user_id, method, destination, amount):
     ensure_reward_user(user_id)
+
     conn = reward_db()
+
     try:
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO withdraw_requests
-            (user_id, binance_id, amount, status, created_at)
-            VALUES (?, ?, ?, 'DEMO_RECORDED', ?)
+            (user_id, method, destination, amount, status, created_at)
+            VALUES (?, ?, ?, ?, 'PENDING', ?)
             """,
-            (user_id, str(binance_id), float(amount), datetime.now(DHAKA_TZ).isoformat())
+            (
+                user_id,
+                str(method),
+                str(destination),
+                float(amount),
+                datetime.now(DHAKA_TZ).isoformat()
+            )
         )
+
+        request_id = cursor.lastrowid
         conn.commit()
+
+        return request_id
+
+    except Exception:
+        conn.rollback()
+        raise
+
     finally:
         conn.close()
-
 
 # ============================================================
 # LANGUAGES
