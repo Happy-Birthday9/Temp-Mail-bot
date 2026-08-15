@@ -5,7 +5,7 @@
 
 from decimal import Decimal, InvalidOperation
 
-# Reward amounts
+# Reward amounts (bot.py এর সাথে মিল রেখে)
 REFERRAL_REWARD = Decimal("0.00158")
 EMAIL_CODE_REWARD = Decimal("0.00130")
 
@@ -80,9 +80,8 @@ def reward_summary(referrals=0, emails=0):
 
 # ------------------------------------------------------------
 # IMPORTANT:
-# database.py should be responsible for actually saving
+# database.py / bot.py should be responsible for actually saving
 # rewards to SQLite.
-#
 # This file only keeps reward rules/calculations in one place.
 # ------------------------------------------------------------
 
@@ -96,4 +95,4 @@ __all__ = [
     "calculate_email_reward",
     "format_reward",
     "reward_summary",
-        ]
+    ]
