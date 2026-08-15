@@ -115,13 +115,15 @@ def init_reward_db():
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS withdraw_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                binance_id TEXT NOT NULL,
-                amount REAL NOT NULL,
-                status TEXT NOT NULL DEFAULT 'DEMO_RECORDED',
-                created_at TEXT NOT NULL
-            )
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    method TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    amount REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    created_at TEXT NOT NULL,
+    processed_at TEXT
+)
         """)
         conn.commit()
     finally:
