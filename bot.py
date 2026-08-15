@@ -763,27 +763,55 @@ def dhaka_time():
 # ============================================================
 # CODE DETECTION
 # ============================================================
-
 def extract_code(text):
     if not text:
         return None
+
     text = str(text)
+
     patterns = [
-        r"(?:verification|verify|verification\s*code|otp|code)\D{0,30}(\d{4,8})",
-        r"(?:one[\s-]*time[\s-]*password)\D{0,30}(\d{4,8})",
-        r"(?:login\s*code)\D{0,30}(\d{4,8})",
+        r"(?:verification|verify|verification\s*code|verification\s*number|otp|one[\s-]*time[\s-]*password|login\s*code|security\s*code|confirmation\s*code)\D{0,40}(\d{4,8})",
+        r"(?:code|pin)\D{0,20}(\d{4,8})",
     ]
+
     for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE
+        )
+
         if match:
             return match.group(1)
-    for digits in (6, 5, 4):
-        match = re.search(rf"(?<!\d)\d{{{digits}}}(?!\d)", text)
-        if match:
-            return match.group(0)
+
+    # সাধারণ 6-digit OTP
+    match = re.search(
+        r"(?<!\d)\d{6}(?!\d)",
+        text
+    )
+
+    if match:
+        return match.group(0)
+
+    # 5-digit OTP
+    match = re.search(
+        r"(?<!\d)\d{5}(?!\d)",
+        text
+    )
+
+    if match:
+        return match.group(0)
+
+    # 4-digit OTP
+    match = re.search(
+        r"(?<!\d)\d{4}(?!\d)",
+        text
+    )
+
+    if match:
+        return match.group(0)
+
     return None
-
-
 # ============================================================
 # MESSAGE ID
 # ============================================================
