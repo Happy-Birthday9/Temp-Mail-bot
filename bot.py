@@ -582,7 +582,7 @@ TEXT = {
         "verification": "🔐 <b>VERIFICATION CODE</b>\n\n🔢 <b>Code:</b> <code>{code}</code>",
         "copy_code": "📋 Code Copy করুন",
         "language": "🌐 <b>আপনার ভাষা নির্বাচন করুন:</b>",
-        "help": "📚 <b>HELP</b>\n\n➕ নতুন তৈরি করুন — নতুন Email\n📥 ইনবক্স — Email দেখুন\n🔄 রিফ্রেশ — নতুন Email check\n👥 রেফার সিস্টেম — Refer & earn\n💰 /balance — Balance\n💸 /withdraw — Withdraw\n\n/start — Start\n/language — ভাষা\n/inbox — Inbox\n/refresh — Refresh\n/help — Help\n/about — About\n/stats — Statistics",
+        "help": "📚 <b>HELP</b>\n\n➕ নতুন তৈরি করুন — নতুন Email\n📥 ইনবক্স — Email দেখুন\n🔄 রিফ্রেশ — নতুন Email check\n👥 রেফার সিস্টেম — Refer & earn\n💰 /balance — Balance\n💸 /withdraw — Withdraw\n\n/start — Start\n/language — ভাষা\n/inbox — Inbox\n/refresh — Refresh\n/help — Help\n/stats — Statistics",
         "about": "📧 <b>TEMP MAIL</b>\n\nদ্রুত Temporary Email receiver।\n\n⚡ Smails API দ্বারা পরিচালিত\n🔒 API key প্রয়োজন নেই",
         "stats": "📊 <b>BOT STATS</b>\n\n👥 Total Users: <b>{users}</b>\n📧 Active Mailboxes: <b>{mailboxes}</b>\n⚡ Auto Inbox: <b>ON</b>\n🔄 Checking: <b>{seconds}s</b>",
         "admin_only": "🔐 <b>ADMIN ONLY</b>\n\nএই Command শুধুমাত্র Administrator-এর জন্য।",
