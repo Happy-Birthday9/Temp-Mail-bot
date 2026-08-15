@@ -648,7 +648,7 @@ TEXT = {
         "verification": "🔐 <b>VERIFICATION CODE</b>\n\n🔢 <b>Code:</b> <code>{code}</code>",
         "copy_code": "📋 Copy Code",
         "language": "🌐 <b>Language select karein:</b>",
-        "help": "📚 <b>HELP</b>\n\n➕ Naya Generate — Email\n📥 Inbox — Emails\n🔄 Refresh — Check\n👥 Refer System — Refer & earn\n💰 /balance — Balance\n💸 /withdraw — Withdraw\n\n/start /language /inbox /refresh /help /about /stats",
+        "help": "📚 <b>HELP</b>\n\n➕ Naya Generate — Email\n📥 Inbox — Emails\n🔄 Refresh — Check\n👥 Refer System — Refer & earn\n💰 /balance — Balance\n💸 /withdraw — Withdraw\n\n/start /language /inbox /refresh /help /stats",
         "about": "📧 <b>TEMP MAIL</b>\n\nFast Temporary Email receiver.\n\n⚡ Smails API se powered",
         "stats": "📊 <b>BOT STATS</b>\n\n👥 Total Users: <b>{users}</b>\n📧 Active Mailboxes: <b>{mailboxes}</b>\n⚡ Auto Inbox: <b>ON</b>\n🔄 Checking: <b>{seconds}s</b>",
         "admin_only": "🔐 <b>ADMIN ONLY</b>\n\nYeh command sirf administrator ke liye hai.",
