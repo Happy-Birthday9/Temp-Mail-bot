@@ -2840,10 +2840,15 @@ application.add_handler(
     MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler)
 )
 
+# Text
+application.add_handler(
+    MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler)
+)
+
 # Error
 application.add_error_handler(error_handler)
 
-    print("🤖 Temp Mail Bot is running...")
+print("🤖 Temp Mail Bot is running...")
     print(f"📩 Auto inbox: every {POLL_SECONDS}s")
 
     application.run_polling(drop_pending_updates=True)
