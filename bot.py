@@ -875,9 +875,9 @@ TEXT = {
             "🔄 Your referral system has also been reset. Please refer again. ♻️📊।",
         "reset_notice_single":
             "⚠️ <b>Account Reset Notice</b>\n\n"
-            "আপনার অ্যাকাউন্ট Admin দ্বারা Reset করা হয়েছে।\n\n"
+            "Your account has been reset by the Admin. 🔄👤।\n\n"
             "📌 <b>Reason:</b>\n{reason}\n\n"
-            "💰 আপনার Balance এখন <b>0</b>।",
+            "💰 Your current balance is now. <b>0</b>।",
     },
 
     "hi": {
