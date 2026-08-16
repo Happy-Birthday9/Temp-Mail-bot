@@ -1,6 +1,6 @@
 # ============================================================
 # bot.py
-# TEMP MAIL TELEGRAM BOT (Full Updated)
+# TEMP MAIL TELEGRAM BOT (Updated)
 # ============================================================
 
 import asyncio
@@ -11,7 +11,6 @@ import re
 import sqlite3
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from urllib.parse import urlparse
 
 import aiohttp
 
@@ -582,9 +581,9 @@ TEXT = {
         "verification":
             "🔐 <b>VERIFICATION CODE</b>\n\n"
             "🔢 <b>Code:</b> <code>{code}</code>",
-        "confirm_instruction":
-            "📌 <b>Subject:</b> {subject}\n\n"
-            "⬇️ Please click the Confirm button below.",
+        "confirm_link_text":
+            "🔗 <b>CONFIRM LINK</b>\n\n"
+            "📌 Please press the Confirm button below.",
         "copy_code": "📋 Copy Code",
         "confirm_btn": "✅ Confirm",
         "language": "🌐 <b>Select your language:</b>",
@@ -752,9 +751,9 @@ TEXT = {
         "verification":
             "🔐 <b>VERIFICATION CODE</b>\n\n"
             "🔢 <b>Code:</b> <code>{code}</code>",
-        "confirm_instruction":
-            "📌 <b>Subject:</b> {subject}\n\n"
-            "⬇️ নিচের Confirm বাটন চাপুন।",
+        "confirm_link_text":
+            "🔗 <b>CONFIRM LINK</b>\n\n"
+            "📌 নিচের Confirm বাটন চাপুন।",
         "copy_code": "📋 Code Copy করুন",
         "confirm_btn": "✅ Confirm",
         "language": "🌐 <b>আপনার ভাষা নির্বাচন করুন:</b>",
@@ -924,9 +923,9 @@ TEXT = {
         "verification":
             "🔐 <b>VERIFICATION CODE</b>\n\n"
             "🔢 <b>Code:</b> <code>{code}</code>",
-        "confirm_instruction":
-            "📌 <b>Subject:</b> {subject}\n\n"
-            "⬇️ Niche Confirm button dabayein.",
+        "confirm_link_text":
+            "🔗 <b>CONFIRM LINK</b>\n\n"
+            "📌 Niche Confirm button dabayein.",
         "copy_code": "📋 Copy Code",
         "confirm_btn": "✅ Confirm",
         "language": "🌐 <b>Language select karein:</b>",
@@ -1129,10 +1128,15 @@ def confirm_link_keyboard(url, lang):
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(t["generate"], callback_data="generate"),
-                InlineKeyboardButton(t["confirm_btn"], url=url),
+                InlineKeyboardButton(
+                    t["confirm_btn"],
+                    url=url,
+                )
             ],
-            [InlineKeyboardButton(t["refresh"], callback_data="refresh")],
+            [
+                InlineKeyboardButton(t["generate"], callback_data="generate"),
+                InlineKeyboardButton(t["refresh"], callback_data="refresh"),
+            ],
         ]
     )
 
@@ -1290,9 +1294,14 @@ def dhaka_time():
     return datetime.now(DHAKA_TZ).strftime("%d %b %Y, %I:%M:%S %p")
 
 
+# ============================================================
+# IMPROVED CODE + LINK DETECTION
+# ============================================================
+
 def extract_code(text):
     if not text:
         return None
+
     text = str(text)
 
     patterns = [
@@ -1300,38 +1309,47 @@ def extract_code(text):
         r"verification\s*number|otp|one[\s-]*time[\s-]*"
         r"password|login\s*code|security\s*code|"
         r"confirmation\s*code|your\s*code|code\s*is|"
-        r"your\s*verification\s*code)\D{0,40}(\d{4,8})",
-        r"(?:code|pin|otp)\s*[:=]?\s*(\d{4,8})",
-        r"(?:^|\s)(\d{6})(?:\s|$)",
-        r"(?:^|\s)(\d{4,8})(?:\s|$)",
+        r"otp\s*is|pin\s*is|is\s*:?\s*)\D{0,40}(\d{4,8})",
+
+        r"(?:code|pin|otp)\s*[:=\-]?\s*(\d{4,8})",
+        r"(?:is|:)\s*(\d{4,8})\b",
+        r"\b(\d{6})\b",
+        r"\b(\d{5})\b",
+        r"\b(\d{4})\b",
+        r"\b(\d{8})\b",
+        r"\b(\d{7})\b",
     ]
 
     for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            return match.group(1)
-
-    for length in (6, 5, 4, 8):
-        match = re.search(rf"(?<!\d)\d{{{length}}}(?!\d)", text)
-        if match:
-            return match.group(0)
+            code = match.group(1)
+            if code and code.isdigit() and 4 <= len(code) <= 8:
+                return code
 
     return None
 
 
-def extract_links(text):
+def extract_confirm_link(text):
     if not text:
-        return []
-    # http/https links
-    pattern = r'https?://[^\s<>"\'\)\]]+'
-    links = re.findall(pattern, str(text), re.IGNORECASE)
-    # clean trailing punctuation
-    cleaned = []
-    for link in links:
-        link = link.rstrip(".,;:!?)\"'")
-        if link and len(link) > 10:
-            cleaned.append(link)
-    return cleaned
+        return None
+
+    text = str(text)
+
+    # Common confirmation / verification links
+    patterns = [
+        r"(https?://[^\s<>\"']+(?:confirm|verify|activate|validation|click)[^\s<>\"']*)",
+        r"(https?://[^\s<>\"']+/[^\s<>\"']*)",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            url = match.group(1).rstrip(".,);]")
+            if len(url) > 15:
+                return url
+
+    return None
 
 
 def get_message_id(item):
@@ -1343,6 +1361,7 @@ def get_message_id(item):
     ):
         if value is not None:
             return str(value)
+
     raw = "|".join(
         [
             str(item.get("subject", "")),
@@ -1467,24 +1486,20 @@ def parse_mail(item):
     return str(sender), str(subject), str(body)
 
 
+# ============================================================
+# BUILD EMAIL MESSAGE (IMPROVED)
+# ============================================================
+
 def build_mail_message(item, lang, reward_added):
     t = TEXT[lang]
     sender, subject, body = parse_mail(item)
 
     full_text = f"{subject}\n{body}"
+
     code = extract_code(full_text)
-    links = extract_links(full_text)
+    confirm_link = extract_confirm_link(full_text)
 
-    # Prefer confirmation / verification links
-    confirm_link = None
-    for link in links:
-        lower = link.lower()
-        if any(k in lower for k in ("confirm", "verify", "activate", "validation", "click", "token")):
-            confirm_link = link
-            break
-    if not confirm_link and links:
-        confirm_link = links[0]
-
+    # Priority 1: Code found → only Code + Reward
     if code:
         amount = EMAIL_REWARD if reward_added else 0.0
         content = (
@@ -1493,11 +1508,15 @@ def build_mail_message(item, lang, reward_added):
             + t["earned"].format(amount=f"{amount:.5f}")
         )
         keyboard = code_keyboard(code, lang)
+
+    # Priority 2: Confirm link found → Confirm button
     elif confirm_link:
-        content = t["confirm_instruction"].format(subject=safe(subject))
+        content = t["confirm_link_text"]
         keyboard = confirm_link_keyboard(confirm_link, lang)
+
+    # Priority 3: Normal message
     else:
-        content = t["message_content"].format(body=safe(body[:1200]))
+        content = t["message_content"].format(body=safe(body[:1500]))
         keyboard = main_keyboard(lang)
 
     message_text = t["new_mail"].format(
@@ -1511,13 +1530,15 @@ def build_mail_message(item, lang, reward_added):
 
 async def send_auto_mail(bot, user_id, item, lang):
     message_id = get_message_id(item)
-    code = extract_code(
+    full_text = (
         f"{item.get('subject', '')}\n"
         f"{item.get('text', '')}\n"
         f"{item.get('body', '')}\n"
         f"{item.get('intro', '')}\n"
         f"{item.get('content', '')}"
     )
+    code = extract_code(full_text)
+
     reward_added = False
     if code and message_id:
         reward_added = add_email_reward(user_id, message_id, code)
@@ -1528,19 +1549,20 @@ async def send_auto_mail(bot, user_id, item, lang):
         text=message_text,
         reply_markup=keyboard,
         parse_mode="HTML",
-        disable_web_page_preview=True,
     )
 
 
 async def send_inbox_mail(bot, user_id, item, lang):
     message_id = get_message_id(item)
-    code = extract_code(
+    full_text = (
         f"{item.get('subject', '')}\n"
         f"{item.get('text', '')}\n"
         f"{item.get('body', '')}\n"
         f"{item.get('intro', '')}\n"
         f"{item.get('content', '')}"
     )
+    code = extract_code(full_text)
+
     reward_added = False
     if code and message_id:
         reward_added = add_email_reward(user_id, message_id, code)
@@ -1551,7 +1573,6 @@ async def send_inbox_mail(bot, user_id, item, lang):
         text=message_text,
         reply_markup=keyboard,
         parse_mode="HTML",
-        disable_web_page_preview=True,
     )
 
 
@@ -1969,7 +1990,7 @@ async def dashboard_callback(update, context):
     if data == "dash_broadcast":
         context.user_data["waiting_dashboard_broadcast"] = True
         await query.message.reply_text(
-            "📢 <b>Broadcast</b>\n\n"
+            "📢 <b>Broadcast (সব User)</b>\n\n"
             "যে মেসেজ সব ইউজারকে পাঠাতে চান সেটা লিখে পাঠান:",
             parse_mode="HTML",
         )
@@ -2031,10 +2052,11 @@ async def dashboard_callback(update, context):
 
 
 # ============================================================
-# BOARDCHAT
+# /broadcast = Single User Message (Chat ID → Message)
 # ============================================================
 
-async def boardchat_command(update, context):
+async def broadcast_command(update, context):
+    """এখন /broadcast = একজন User কে মেসেজ পাঠানো"""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text(
             "🚫 <b>Access Denied!</b>\n\n"
@@ -2043,11 +2065,11 @@ async def boardchat_command(update, context):
         )
         return
 
-    context.user_data.pop("waiting_boardchat_chatid", None)
-    context.user_data.pop("waiting_boardchat_message", None)
-    context.user_data.pop("boardchat_target", None)
+    context.user_data.pop("waiting_broadcast_chatid", None)
+    context.user_data.pop("waiting_broadcast_message", None)
+    context.user_data.pop("broadcast_target", None)
 
-    context.user_data["waiting_boardchat_chatid"] = True
+    context.user_data["waiting_broadcast_chatid"] = True
 
     await update.message.reply_text(
         "📨 <b>Single User Message</b>\n\n"
@@ -2072,6 +2094,7 @@ async def text_handler(update, context):
 
     if is_admin(user_id):
 
+        # Custom rejection reason
         custom_request_id = context.user_data.get("waiting_custom_reject_reason")
         if custom_request_id:
             request_id = int(custom_request_id)
@@ -2095,6 +2118,7 @@ async def text_handler(update, context):
             )
             return
 
+        # Reset All Reason
         if context.user_data.get("waiting_reset_all_reason"):
             reason = text.strip()
             if not reason:
@@ -2113,10 +2137,13 @@ async def text_handler(update, context):
             sent = 0
             for uid in users:
                 try:
-                    ulang = user_lang(uid)
+                    user_lang_code = user_lang(uid)
+                    notice = TEXT[user_lang_code]["reset_notice"].format(
+                        reason=safe(reason)
+                    )
                     await context.bot.send_message(
                         chat_id=uid,
-                        text=TEXT[ulang]["reset_notice"].format(reason=safe(reason)),
+                        text=notice,
                         parse_mode="HTML",
                     )
                     sent += 1
@@ -2132,6 +2159,7 @@ async def text_handler(update, context):
             )
             return
 
+        # Custom Reset: Chat ID
         if context.user_data.get("waiting_custom_reset_chatid"):
             try:
                 target_id = int(text.strip())
@@ -2150,6 +2178,7 @@ async def text_handler(update, context):
             )
             return
 
+        # Custom Reset: Reason
         if context.user_data.get("waiting_custom_reset_reason"):
             reason = text.strip()
             target_id = context.user_data.get("custom_reset_target")
@@ -2169,10 +2198,13 @@ async def text_handler(update, context):
                 return
 
             try:
-                ulang = user_lang(target_id)
+                user_lang_code = user_lang(target_id)
+                notice = TEXT[user_lang_code]["reset_notice_single"].format(
+                    reason=safe(reason)
+                )
                 await context.bot.send_message(
                     chat_id=target_id,
-                    text=TEXT[ulang]["reset_notice_single"].format(reason=safe(reason)),
+                    text=notice,
                     parse_mode="HTML",
                 )
             except Exception:
@@ -2187,6 +2219,7 @@ async def text_handler(update, context):
             )
             return
 
+        # Dashboard Broadcast (সব User)
         if context.user_data.get("waiting_dashboard_broadcast"):
             broadcast_text = text.strip()
             if not broadcast_text:
@@ -2218,7 +2251,8 @@ async def text_handler(update, context):
             )
             return
 
-        if context.user_data.get("waiting_boardchat_chatid"):
+        # /broadcast = Single User: Chat ID
+        if context.user_data.get("waiting_broadcast_chatid"):
             try:
                 target_id = int(text.strip())
             except ValueError:
@@ -2227,9 +2261,9 @@ async def text_handler(update, context):
                 )
                 return
 
-            context.user_data["waiting_boardchat_chatid"] = False
-            context.user_data["boardchat_target"] = target_id
-            context.user_data["waiting_boardchat_message"] = True
+            context.user_data["waiting_broadcast_chatid"] = False
+            context.user_data["broadcast_target"] = target_id
+            context.user_data["waiting_broadcast_message"] = True
 
             await update.message.reply_text(
                 f"✅ Target User: <code>{target_id}</code>\n\n"
@@ -2238,8 +2272,9 @@ async def text_handler(update, context):
             )
             return
 
-        if context.user_data.get("waiting_boardchat_message"):
-            target_id = context.user_data.get("boardchat_target")
+        # /broadcast = Single User: Message
+        if context.user_data.get("waiting_broadcast_message"):
+            target_id = context.user_data.get("broadcast_target")
             message_text = text.strip()
 
             if not target_id or not message_text:
@@ -2247,8 +2282,8 @@ async def text_handler(update, context):
                 context.user_data.clear()
                 return
 
-            context.user_data.pop("waiting_boardchat_message", None)
-            context.user_data.pop("boardchat_target", None)
+            context.user_data.pop("waiting_broadcast_message", None)
+            context.user_data.pop("broadcast_target", None)
 
             try:
                 await context.bot.send_message(
@@ -2269,6 +2304,7 @@ async def text_handler(update, context):
                 )
             return
 
+    # Withdraw destination
     if context.user_data.get("waiting_withdraw_destination"):
         method = context.user_data.get("withdraw_method")
         amount = float(context.user_data.get("withdraw_amount", 0))
@@ -2336,6 +2372,7 @@ async def text_handler(update, context):
         )
         return
 
+    # Reply keyboard
     if text in [
         t["generate"],
         "➕ Generate New",
@@ -2684,7 +2721,7 @@ async def callback_handler(update, context):
 
 
 # ============================================================
-# STATS / ADMIN / BROADCAST
+# STATS / ADMIN
 # ============================================================
 
 async def stats_command(update, context):
@@ -2740,42 +2777,6 @@ async def admin_command(update, context):
     lang = user_lang(update.effective_user.id)
     await update.message.reply_text(
         TEXT[lang]["admin_panel"],
-        parse_mode="HTML",
-    )
-
-
-async def broadcast_command(update, context):
-    if not is_admin(update.effective_user.id):
-        await admin_only(update)
-        return
-
-    lang = user_lang(update.effective_user.id)
-    if not context.args:
-        await update.message.reply_text(
-            TEXT[lang]["broadcast_start"],
-            parse_mode="HTML",
-        )
-        return
-
-    broadcast_text = " ".join(context.args)
-    users = get_all_users()
-    sent = 0
-    failed = 0
-
-    for user_id in users:
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=broadcast_text,
-                parse_mode="HTML",
-            )
-            sent += 1
-            await asyncio.sleep(0.05)
-        except Exception:
-            failed += 1
-
-    await update.message.reply_text(
-        TEXT[lang]["broadcast_done"].format(sent=sent, failed=failed),
         parse_mode="HTML",
     )
 
@@ -2854,8 +2855,6 @@ async def post_init(application):
         name="auto-inbox",
     )
     logger.info("Automatic inbox started: every %s seconds", POLL_SECONDS)
-
-
 # ============================================================
 # MAIN
 # ============================================================
@@ -2870,9 +2869,6 @@ def main():
         .post_init(post_init)
         .build()
     )
-# =========================
-    # COMMAND HANDLERS
-    # =========================
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("inbox", inbox_command))
@@ -2886,20 +2882,9 @@ def main():
     application.add_handler(CommandHandler("withdraw", withdraw_command))
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CommandHandler("broadcast", broadcast_command))
-    application.add_handler(CommandHandler("boardchat", boardchat_command))
     application.add_handler(CommandHandler("dashboard", dashboard_command))
 
-    # =========================
-    # CALLBACK HANDLER
-    # =========================
-
-    application.add_handler(
-        CallbackQueryHandler(callback_handler)
-    )
-
-    # =========================
-    # TEXT HANDLER
-    # =========================
+    application.add_handler(CallbackQueryHandler(callback_handler))
 
     application.add_handler(
         MessageHandler(
@@ -2908,15 +2893,7 @@ def main():
         )
     )
 
-    # =========================
-    # ERROR HANDLER
-    # =========================
-
     application.add_error_handler(error_handler)
-
-    # =========================
-    # START BOT
-    # =========================
 
     print("🤖 Temp Mail Bot is running...")
     print(f"📩 Auto inbox: every {POLL_SECONDS}s")
