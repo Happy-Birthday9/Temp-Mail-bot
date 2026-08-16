@@ -1,6 +1,6 @@
 # ============================================================
 # bot.py
-# TEMP MAIL TELEGRAM BOT
+# TEMP MAIL TELEGRAM BOT (Full Updated)
 # ============================================================
 
 import asyncio
@@ -11,6 +11,7 @@ import re
 import sqlite3
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -574,14 +575,18 @@ TEXT = {
             "🌐 <b>Source:</b> Email\n"
             "👤 <b>From:</b> {sender}\n"
             "📌 <b>Subject:</b> {subject}\n"
-            "🕐 <b>UTC Time:</b> {date}\n\n"
+            "🕐 <b>Time:</b> {date}\n\n"
             "{content}",
         "earned": "💰 <b>You earned:</b> <code>{amount}</code>",
         "message_content": "💬 <b>Message:</b>\n{body}",
         "verification":
             "🔐 <b>VERIFICATION CODE</b>\n\n"
             "🔢 <b>Code:</b> <code>{code}</code>",
+        "confirm_instruction":
+            "📌 <b>Subject:</b> {subject}\n\n"
+            "⬇️ Please click the Confirm button below.",
         "copy_code": "📋 Copy Code",
+        "confirm_btn": "✅ Confirm",
         "language": "🌐 <b>Select your language:</b>",
         "help":
             "📚 <b>HELP</b>\n\n"
@@ -690,6 +695,17 @@ TEXT = {
         "admin_approved": "✅ Request #{request_id} approved.",
         "approve": "✅ Accept",
         "reject": "❌ Reject",
+        "reset_notice":
+            "⚠️ <b>Account Reset Notice</b>\n\n"
+            "Your account has been reset by Admin.\n\n"
+            "📌 <b>Reason:</b>\n{reason}\n\n"
+            "💰 Your Balance is now <b>0</b>.\n"
+            "🔄 Referral system has also been reset.",
+        "reset_notice_single":
+            "⚠️ <b>Account Reset Notice</b>\n\n"
+            "Your account has been reset by Admin.\n\n"
+            "📌 <b>Reason:</b>\n{reason}\n\n"
+            "💰 Your Balance is now <b>0</b>.",
     },
 
     "bn": {
@@ -729,14 +745,18 @@ TEXT = {
             "🌐 <b>Source:</b> Email\n"
             "👤 <b>From:</b> {sender}\n"
             "📌 <b>Subject:</b> {subject}\n"
-            "🕐 <b>UTC সময়:</b> {date}\n\n"
+            "🕐 <b>সময়:</b> {date}\n\n"
             "{content}",
         "earned": "💰 <b>আপনি পেয়েছেন:</b> <code>{amount}</code>",
         "message_content": "💬 <b>Message:</b>\n{body}",
         "verification":
             "🔐 <b>VERIFICATION CODE</b>\n\n"
             "🔢 <b>Code:</b> <code>{code}</code>",
+        "confirm_instruction":
+            "📌 <b>Subject:</b> {subject}\n\n"
+            "⬇️ নিচের Confirm বাটন চাপুন।",
         "copy_code": "📋 Code Copy করুন",
+        "confirm_btn": "✅ Confirm",
         "language": "🌐 <b>আপনার ভাষা নির্বাচন করুন:</b>",
         "help":
             "📚 <b>HELP</b>\n\n"
@@ -847,6 +867,17 @@ TEXT = {
         "admin_approved": "✅ Request #{request_id} approved.",
         "approve": "✅ Accept",
         "reject": "❌ Reject",
+        "reset_notice":
+            "⚠️ <b>Account Reset Notice</b>\n\n"
+            "আপনার অ্যাকাউন্ট Admin দ্বারা Reset করা হয়েছে।\n\n"
+            "📌 <b>Reason:</b>\n{reason}\n\n"
+            "💰 আপনার Balance এখন <b>0</b>।\n"
+            "🔄 Referral সিস্টেমও রিসেট হয়েছে।",
+        "reset_notice_single":
+            "⚠️ <b>Account Reset Notice</b>\n\n"
+            "আপনার অ্যাকাউন্ট Admin দ্বারা Reset করা হয়েছে।\n\n"
+            "📌 <b>Reason:</b>\n{reason}\n\n"
+            "💰 আপনার Balance এখন <b>0</b>।",
     },
 
     "hi": {
@@ -886,14 +917,18 @@ TEXT = {
             "🌐 <b>Source:</b> Email\n"
             "👤 <b>From:</b> {sender}\n"
             "📌 <b>Subject:</b> {subject}\n"
-            "🕐 <b>UTC Time:</b> {date}\n\n"
+            "🕐 <b>Time:</b> {date}\n\n"
             "{content}",
         "earned": "💰 <b>You earned:</b> <code>{amount}</code>",
         "message_content": "💬 <b>Message:</b>\n{body}",
         "verification":
             "🔐 <b>VERIFICATION CODE</b>\n\n"
             "🔢 <b>Code:</b> <code>{code}</code>",
+        "confirm_instruction":
+            "📌 <b>Subject:</b> {subject}\n\n"
+            "⬇️ Niche Confirm button dabayein.",
         "copy_code": "📋 Copy Code",
+        "confirm_btn": "✅ Confirm",
         "language": "🌐 <b>Language select karein:</b>",
         "help":
             "📚 <b>HELP</b>\n\n"
@@ -998,6 +1033,17 @@ TEXT = {
         "admin_approved": "✅ Request #{request_id} approved.",
         "approve": "✅ Accept",
         "reject": "❌ Reject",
+        "reset_notice":
+            "⚠️ <b>Account Reset Notice</b>\n\n"
+            "Aapka account Admin dwara Reset kar diya gaya hai.\n\n"
+            "📌 <b>Reason:</b>\n{reason}\n\n"
+            "💰 Aapka Balance ab <b>0</b> hai.\n"
+            "🔄 Referral system bhi reset ho gaya hai.",
+        "reset_notice_single":
+            "⚠️ <b>Account Reset Notice</b>\n\n"
+            "Aapka account Admin dwara Reset kar diya gaya hai.\n\n"
+            "📌 <b>Reason:</b>\n{reason}\n\n"
+            "💰 Aapka Balance ab <b>0</b> hai.",
     },
 }
 
@@ -1072,6 +1118,19 @@ def code_keyboard(code, lang):
                     t["copy_code"],
                     copy_text=CopyTextButton(text=str(code)),
                 ),
+            ],
+            [InlineKeyboardButton(t["refresh"], callback_data="refresh")],
+        ]
+    )
+
+
+def confirm_link_keyboard(url, lang):
+    t = TEXT[lang]
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(t["generate"], callback_data="generate"),
+                InlineKeyboardButton(t["confirm_btn"], url=url),
             ],
             [InlineKeyboardButton(t["refresh"], callback_data="refresh")],
         ]
@@ -1235,22 +1294,44 @@ def extract_code(text):
     if not text:
         return None
     text = str(text)
+
     patterns = [
         r"(?:verification|verify|verification\s*code|"
         r"verification\s*number|otp|one[\s-]*time[\s-]*"
         r"password|login\s*code|security\s*code|"
-        r"confirmation\s*code)\D{0,40}(\d{4,8})",
-        r"(?:code|pin)\D{0,20}(\d{4,8})",
+        r"confirmation\s*code|your\s*code|code\s*is|"
+        r"your\s*verification\s*code)\D{0,40}(\d{4,8})",
+        r"(?:code|pin|otp)\s*[:=]?\s*(\d{4,8})",
+        r"(?:^|\s)(\d{6})(?:\s|$)",
+        r"(?:^|\s)(\d{4,8})(?:\s|$)",
     ]
+
     for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
+        match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
         if match:
             return match.group(1)
-    for length in (6, 5, 4):
+
+    for length in (6, 5, 4, 8):
         match = re.search(rf"(?<!\d)\d{{{length}}}(?!\d)", text)
         if match:
             return match.group(0)
+
     return None
+
+
+def extract_links(text):
+    if not text:
+        return []
+    # http/https links
+    pattern = r'https?://[^\s<>"\'\)\]]+'
+    links = re.findall(pattern, str(text), re.IGNORECASE)
+    # clean trailing punctuation
+    cleaned = []
+    for link in links:
+        link = link.rstrip(".,;:!?)\"'")
+        if link and len(link) > 10:
+            cleaned.append(link)
+    return cleaned
 
 
 def get_message_id(item):
@@ -1389,7 +1470,20 @@ def parse_mail(item):
 def build_mail_message(item, lang, reward_added):
     t = TEXT[lang]
     sender, subject, body = parse_mail(item)
-    code = extract_code(f"{subject}\n{body}")
+
+    full_text = f"{subject}\n{body}"
+    code = extract_code(full_text)
+    links = extract_links(full_text)
+
+    # Prefer confirmation / verification links
+    confirm_link = None
+    for link in links:
+        lower = link.lower()
+        if any(k in lower for k in ("confirm", "verify", "activate", "validation", "click", "token")):
+            confirm_link = link
+            break
+    if not confirm_link and links:
+        confirm_link = links[0]
 
     if code:
         amount = EMAIL_REWARD if reward_added else 0.0
@@ -1399,8 +1493,11 @@ def build_mail_message(item, lang, reward_added):
             + t["earned"].format(amount=f"{amount:.5f}")
         )
         keyboard = code_keyboard(code, lang)
+    elif confirm_link:
+        content = t["confirm_instruction"].format(subject=safe(subject))
+        keyboard = confirm_link_keyboard(confirm_link, lang)
     else:
-        content = t["message_content"].format(body=safe(body[:1500]))
+        content = t["message_content"].format(body=safe(body[:1200]))
         keyboard = main_keyboard(lang)
 
     message_text = t["new_mail"].format(
@@ -1431,6 +1528,7 @@ async def send_auto_mail(bot, user_id, item, lang):
         text=message_text,
         reply_markup=keyboard,
         parse_mode="HTML",
+        disable_web_page_preview=True,
     )
 
 
@@ -1453,6 +1551,7 @@ async def send_inbox_mail(bot, user_id, item, lang):
         text=message_text,
         reply_markup=keyboard,
         parse_mode="HTML",
+        disable_web_page_preview=True,
     )
 
 
@@ -1932,7 +2031,7 @@ async def dashboard_callback(update, context):
 
 
 # ============================================================
-# BOARDCHAT (Single User Message)
+# BOARDCHAT
 # ============================================================
 
 async def boardchat_command(update, context):
@@ -1973,7 +2072,6 @@ async def text_handler(update, context):
 
     if is_admin(user_id):
 
-        # Custom rejection reason
         custom_request_id = context.user_data.get("waiting_custom_reject_reason")
         if custom_request_id:
             request_id = int(custom_request_id)
@@ -1997,7 +2095,6 @@ async def text_handler(update, context):
             )
             return
 
-        # Reset All Reason
         if context.user_data.get("waiting_reset_all_reason"):
             reason = text.strip()
             if not reason:
@@ -2016,15 +2113,10 @@ async def text_handler(update, context):
             sent = 0
             for uid in users:
                 try:
+                    ulang = user_lang(uid)
                     await context.bot.send_message(
                         chat_id=uid,
-                        text=(
-                            "⚠️ <b>Account Reset Notice</b>\n\n"
-                            "আপনার অ্যাকাউন্ট Admin দ্বারা Reset করা হয়েছে।\n\n"
-                            f"📌 <b>Reason:</b>\n{safe(reason)}\n\n"
-                            "💰 আপনার Balance এখন <b>0</b>।\n"
-                            "🔄 Referral সিস্টেমও রিসেট হয়েছে।"
-                        ),
+                        text=TEXT[ulang]["reset_notice"].format(reason=safe(reason)),
                         parse_mode="HTML",
                     )
                     sent += 1
@@ -2040,7 +2132,6 @@ async def text_handler(update, context):
             )
             return
 
-        # Custom Reset: Chat ID
         if context.user_data.get("waiting_custom_reset_chatid"):
             try:
                 target_id = int(text.strip())
@@ -2059,7 +2150,6 @@ async def text_handler(update, context):
             )
             return
 
-        # Custom Reset: Reason
         if context.user_data.get("waiting_custom_reset_reason"):
             reason = text.strip()
             target_id = context.user_data.get("custom_reset_target")
@@ -2079,14 +2169,10 @@ async def text_handler(update, context):
                 return
 
             try:
+                ulang = user_lang(target_id)
                 await context.bot.send_message(
                     chat_id=target_id,
-                    text=(
-                        "⚠️ <b>Account Reset Notice</b>\n\n"
-                        "আপনার অ্যাকাউন্ট Admin দ্বারা Reset করা হয়েছে।\n\n"
-                        f"📌 <b>Reason:</b>\n{safe(reason)}\n\n"
-                        "💰 আপনার Balance এখন <b>0</b>।"
-                    ),
+                    text=TEXT[ulang]["reset_notice_single"].format(reason=safe(reason)),
                     parse_mode="HTML",
                 )
             except Exception:
@@ -2101,7 +2187,6 @@ async def text_handler(update, context):
             )
             return
 
-        # Dashboard Broadcast
         if context.user_data.get("waiting_dashboard_broadcast"):
             broadcast_text = text.strip()
             if not broadcast_text:
@@ -2133,7 +2218,6 @@ async def text_handler(update, context):
             )
             return
 
-        # Boardchat: Chat ID
         if context.user_data.get("waiting_boardchat_chatid"):
             try:
                 target_id = int(text.strip())
@@ -2154,7 +2238,6 @@ async def text_handler(update, context):
             )
             return
 
-        # Boardchat: Message
         if context.user_data.get("waiting_boardchat_message"):
             target_id = context.user_data.get("boardchat_target")
             message_text = text.strip()
@@ -2186,7 +2269,6 @@ async def text_handler(update, context):
                 )
             return
 
-    # Withdraw destination
     if context.user_data.get("waiting_withdraw_destination"):
         method = context.user_data.get("withdraw_method")
         amount = float(context.user_data.get("withdraw_amount", 0))
@@ -2254,7 +2336,6 @@ async def text_handler(update, context):
         )
         return
 
-    # Reply keyboard
     if text in [
         t["generate"],
         "➕ Generate New",
@@ -2773,8 +2854,6 @@ async def post_init(application):
         name="auto-inbox",
     )
     logger.info("Automatic inbox started: every %s seconds", POLL_SECONDS)
-
-
 # ============================================================
 # MAIN
 # ============================================================
@@ -2789,9 +2868,6 @@ def main():
         .post_init(post_init)
         .build()
     )
-# =========================
-    # COMMAND HANDLERS
-    # =========================
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("inbox", inbox_command))
@@ -2808,17 +2884,7 @@ def main():
     application.add_handler(CommandHandler("boardchat", boardchat_command))
     application.add_handler(CommandHandler("dashboard", dashboard_command))
 
-    # =========================
-    # CALLBACK HANDLER
-    # =========================
-
-    application.add_handler(
-        CallbackQueryHandler(callback_handler)
-    )
-
-    # =========================
-    # TEXT HANDLER
-    # =========================
+    application.add_handler(CallbackQueryHandler(callback_handler))
 
     application.add_handler(
         MessageHandler(
@@ -2827,21 +2893,15 @@ def main():
         )
     )
 
-    # =========================
-    # ERROR HANDLER
-    # =========================
-
     application.add_error_handler(error_handler)
-
-    # =========================
-    # START BOT
-    # =========================
 
     print("🤖 Temp Mail Bot is running...")
     print(f"📩 Auto inbox: every {POLL_SECONDS}s")
 
-    application.run_polling(drop_pending_updates=True)
+    application.run_polling(
+        drop_pending_updates=True
+    )
 
 
 if __name__ == "__main__":
-    main() 
+    main()
