@@ -2789,6 +2789,9 @@ def main():
         .post_init(post_init)
         .build()
     )
+# =========================
+    # COMMAND HANDLERS
+    # =========================
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("inbox", inbox_command))
@@ -2805,19 +2808,40 @@ def main():
     application.add_handler(CommandHandler("boardchat", boardchat_command))
     application.add_handler(CommandHandler("dashboard", dashboard_command))
 
-application.add_handler(CallbackQueryHandler(callback_handler))
+    # =========================
+    # CALLBACK HANDLER
+    # =========================
 
-application.add_handler(
-    MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler)
-)
+    application.add_handler(
+        CallbackQueryHandler(callback_handler)
+    )
 
-application.add_error_handler(error_handler)
+    # =========================
+    # TEXT HANDLER
+    # =========================
 
-print("🤖 Temp Mail Bot is running...")
-print(f"📩 Auto inbox: every {POLL_SECONDS}s")
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            text_handler
+        )
+    )
 
-application.run_polling(drop_pending_updates=True)
+    # =========================
+    # ERROR HANDLER
+    # =========================
+
+    application.add_error_handler(error_handler)
+
+    # =========================
+    # START BOT
+    # =========================
+
+    print("🤖 Temp Mail Bot is running...")
+    print(f"📩 Auto inbox: every {POLL_SECONDS}s")
+
+    application.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
-    main()
+    main() 
