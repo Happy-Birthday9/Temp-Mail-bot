@@ -53,7 +53,7 @@ from database import (
 API_BASE = "https://smails.dev/api"
 
 POLL_SECONDS = 1
-MAX_MESSAGES = 
+MAX_MESSAGES = 3
 
 EMAIL_REWARD = 838383
 REFERRAL_REWARD = 500
@@ -869,15 +869,15 @@ TEXT = {
         "reject": "❌ Reject",
         "reset_notice":
             "⚠️ <b>Account Reset Notice</b>\n\n"
-            "Your account has been reset by the Admin. 🔄👤।\n\n"
+            "আপনার অ্যাকাউন্ট Admin দ্বারা Reset করা হয়েছে।\n\n"
             "📌 <b>Reason:</b>\n{reason}\n\n"
-            "💰 Your current balance is now <b>0</b>।\n"
-            "🔄 Your referral system has also been reset. Please refer again. ♻️📊।",
+            "💰 আপনার Balance এখন <b>0</b>।\n"
+            "🔄 Referral সিস্টেমও রিসেট হয়েছে।",
         "reset_notice_single":
             "⚠️ <b>Account Reset Notice</b>\n\n"
-            "Your account has been reset by the Admin. 🔄👤।\n\n"
+            "আপনার অ্যাকাউন্ট Admin দ্বারা Reset করা হয়েছে।\n\n"
             "📌 <b>Reason:</b>\n{reason}\n\n"
-            "💰 Your current balance is now. <b>0</b>।",
+            "💰 আপনার Balance এখন <b>0</b>।",
     },
 
     "hi": {
@@ -2854,6 +2854,8 @@ async def post_init(application):
         name="auto-inbox",
     )
     logger.info("Automatic inbox started: every %s seconds", POLL_SECONDS)
+
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -2868,6 +2870,9 @@ def main():
         .post_init(post_init)
         .build()
     )
+# =========================
+    # COMMAND HANDLERS
+    # =========================
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("inbox", inbox_command))
@@ -2884,7 +2889,17 @@ def main():
     application.add_handler(CommandHandler("boardchat", boardchat_command))
     application.add_handler(CommandHandler("dashboard", dashboard_command))
 
-    application.add_handler(CallbackQueryHandler(callback_handler))
+    # =========================
+    # CALLBACK HANDLER
+    # =========================
+
+    application.add_handler(
+        CallbackQueryHandler(callback_handler)
+    )
+
+    # =========================
+    # TEXT HANDLER
+    # =========================
 
     application.add_handler(
         MessageHandler(
@@ -2893,15 +2908,20 @@ def main():
         )
     )
 
+    # =========================
+    # ERROR HANDLER
+    # =========================
+
     application.add_error_handler(error_handler)
+
+    # =========================
+    # START BOT
+    # =========================
 
     print("🤖 Temp Mail Bot is running...")
     print(f"📩 Auto inbox: every {POLL_SECONDS}s")
 
-    application.run_polling(
-        drop_pending_updates=True
-    )
+    application.run_polling(drop_pending_updates=True)
 
 
-if __name__ == "__main__":
-    main()
+if __name__
