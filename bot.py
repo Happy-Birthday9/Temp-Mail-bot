@@ -1,24 +1,6 @@
 # ============================================================
 # bot.py
 # TEMP MAIL TELEGRAM BOT
-#
-# Features:
-# - Temporary mailbox
-# - Automatic inbox polling
-# - OTP/code detection
-# - Email rewards
-# - Referral rewards
-# - Withdraw: Binance ID / BEP20
-# - Admin approve/reject withdrawal
-# - Withdrawal rejection reason system
-# - Bangla / English / Hindi rejection
-# - Custom rejection reason
-# - Balance zero confirmation
-# - /dashboard (Admin only)
-#   • Reset All (Confirm → Reason → সব balance 0 + referral রিসেট + নোটিফিকেশন)
-#   • Custom Reset (Chat ID → Reason → নির্দিষ্ট user balance 0)
-#   • Broadcast
-#   • User Data (সব user এর chat id, username, name, total refer, balance)
 # ============================================================
 
 import asyncio
@@ -185,10 +167,6 @@ def init_reward_db():
         conn.close()
 
 
-# ============================================================
-# REWARD USER
-# ============================================================
-
 def ensure_reward_user(user_id):
     conn = reward_db()
     try:
@@ -242,7 +220,6 @@ def get_total_referrals(user_id):
 
 
 def get_all_reward_users():
-    """সব reward user এর তথ্য"""
     conn = reward_db()
     try:
         rows = conn.execute(
@@ -264,10 +241,6 @@ def get_all_reward_users():
 
 
 def reset_all_balances(reason: str):
-    """
-    সব ইউজারের balance 0 + referral রিসেট
-    (যাতে একই আইডি দিয়ে আবার refer করা যায়)
-    """
     conn = reward_db()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -290,7 +263,6 @@ def reset_all_balances(reason: str):
 
 
 def reset_single_user(user_id: int, reason: str):
-    """নির্দিষ্ট ইউজারের balance 0 + তার referral ক্লিয়ার"""
     conn = reward_db()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -320,10 +292,6 @@ def reset_single_user(user_id: int, reason: str):
     finally:
         conn.close()
 
-
-# ============================================================
-# EMAIL REWARD
-# ============================================================
 
 def add_email_reward(user_id, message_id, code):
     ensure_reward_user(user_id)
@@ -365,10 +333,6 @@ def add_email_reward(user_id, message_id, code):
     finally:
         conn.close()
 
-
-# ============================================================
-# REFERRAL
-# ============================================================
 
 def create_referral(referrer_id, referred_user_id):
     if not referrer_id or not referred_user_id:
@@ -431,10 +395,6 @@ def create_referral(referrer_id, referred_user_id):
     finally:
         conn.close()
 
-
-# ============================================================
-# WITHDRAW DATABASE
-# ============================================================
 
 def create_withdraw_request(user_id, method, destination, amount):
     ensure_reward_user(user_id)
@@ -1042,10 +1002,6 @@ TEXT = {
 }
 
 
-# ============================================================
-# PREDEFINED REJECTION REASONS
-# ============================================================
-
 REJECTION_REASONS = {
     "bn":
         "⚠️ সতর্কতা: আপনার অ্যাকাউন্টে অস্বাভাবিক কার্যকলাপ "
@@ -1275,10 +1231,6 @@ def dhaka_time():
     return datetime.now(DHAKA_TZ).strftime("%d %b %Y, %I:%M:%S %p")
 
 
-# ============================================================
-# CODE DETECTION
-# ============================================================
-
 def extract_code(text):
     if not text:
         return None
@@ -1370,10 +1322,6 @@ async def get_messages(token):
     return await api_request("GET", "/mailbox/messages", token)
 
 
-# ============================================================
-# MESSAGE PARSING
-# ============================================================
-
 def extract_messages(data):
     if not data:
         return []
@@ -1438,10 +1386,6 @@ def parse_mail(item):
     return str(sender), str(subject), str(body)
 
 
-# ============================================================
-# BUILD EMAIL MESSAGE
-# ============================================================
-
 def build_mail_message(item, lang, reward_added):
     t = TEXT[lang]
     sender, subject, body = parse_mail(item)
@@ -1467,10 +1411,6 @@ def build_mail_message(item, lang, reward_added):
     )
     return message_text, keyboard, code
 
-
-# ============================================================
-# SEND EMAIL
-# ============================================================
 
 async def send_auto_mail(bot, user_id, item, lang):
     message_id = get_message_id(item)
@@ -1515,10 +1455,6 @@ async def send_inbox_mail(bot, user_id, item, lang):
         parse_mode="HTML",
     )
 
-
-# ============================================================
-# GENERATE MAILBOX
-# ============================================================
 
 async def generate_new(message, user_id, lang):
     t = TEXT[lang]
@@ -1569,7 +1505,7 @@ async def generate_new(message, user_id, lang):
 
 
 # ============================================================
-# START / REFERRAL
+# START
 # ============================================================
 
 async def start(update, context):
@@ -1637,10 +1573,6 @@ async def start(update, context):
     else:
         await generate_new(update.message, user_id, lang)
 
-
-# ============================================================
-# INBOX
-# ============================================================
 
 async def show_inbox(message, user_id, lang):
     t = TEXT[lang]
@@ -1871,7 +1803,7 @@ async def notify_admins_about_withdraw(
 
 
 # ============================================================
-# DASHBOARD COMMAND
+# DASHBOARD
 # ============================================================
 
 async def dashboard_command(update, context):
@@ -1892,10 +1824,6 @@ async def dashboard_command(update, context):
     )
 
 
-# ============================================================
-# DASHBOARD CALLBACK
-# ============================================================
-
 async def dashboard_callback(update, context):
     query = update.callback_query
     user_id = query.from_user.id
@@ -1907,7 +1835,6 @@ async def dashboard_callback(update, context):
 
     await query.answer()
 
-    # ---------- RESET ALL ----------
     if data == "dash_reset_all":
         await query.message.reply_text(
             "⚠️ <b>Reset All</b>\n\n"
@@ -1931,7 +1858,6 @@ async def dashboard_callback(update, context):
         )
         return
 
-    # ---------- CUSTOM RESET ----------
     if data == "dash_custom_reset":
         context.user_data["waiting_custom_reset_chatid"] = True
         await query.message.reply_text(
@@ -1941,7 +1867,6 @@ async def dashboard_callback(update, context):
         )
         return
 
-    # ---------- BROADCAST ----------
     if data == "dash_broadcast":
         context.user_data["waiting_dashboard_broadcast"] = True
         await query.message.reply_text(
@@ -1951,7 +1876,6 @@ async def dashboard_callback(update, context):
         )
         return
 
-    # ---------- USER DATA ----------
     if data == "dash_user_data":
         await query.message.reply_text("📊 User Data লোড হচ্ছে...")
         try:
@@ -2008,6 +1932,32 @@ async def dashboard_callback(update, context):
 
 
 # ============================================================
+# BOARDCHAT (Single User Message)
+# ============================================================
+
+async def boardchat_command(update, context):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text(
+            "🚫 <b>Access Denied!</b>\n\n"
+            "⚠️ This command is available for administrators only.",
+            parse_mode="HTML",
+        )
+        return
+
+    context.user_data.pop("waiting_boardchat_chatid", None)
+    context.user_data.pop("waiting_boardchat_message", None)
+    context.user_data.pop("boardchat_target", None)
+
+    context.user_data["waiting_boardchat_chatid"] = True
+
+    await update.message.reply_text(
+        "📨 <b>Single User Message</b>\n\n"
+        "যে ১ জন User-কে মেসেজ পাঠাতে চান তার <b>Chat ID</b> পাঠান:",
+        parse_mode="HTML",
+    )
+
+
+# ============================================================
 # TEXT HANDLER
 # ============================================================
 
@@ -2021,12 +1971,9 @@ async def text_handler(update, context):
     t = TEXT[lang]
     text = update.message.text.strip()
 
-    # ========================================================
-    # ADMIN DASHBOARD TEXT STATES
-    # ========================================================
     if is_admin(user_id):
 
-        # Custom rejection reason (existing)
+        # Custom rejection reason
         custom_request_id = context.user_data.get("waiting_custom_reject_reason")
         if custom_request_id:
             request_id = int(custom_request_id)
@@ -2186,9 +2133,60 @@ async def text_handler(update, context):
             )
             return
 
-    # ========================================================
-    # WITHDRAW DESTINATION
-    # ========================================================
+        # Boardchat: Chat ID
+        if context.user_data.get("waiting_boardchat_chatid"):
+            try:
+                target_id = int(text.strip())
+            except ValueError:
+                await update.message.reply_text(
+                    "⚠️ সঠিক Chat ID দিন (শুধু সংখ্যা)।"
+                )
+                return
+
+            context.user_data["waiting_boardchat_chatid"] = False
+            context.user_data["boardchat_target"] = target_id
+            context.user_data["waiting_boardchat_message"] = True
+
+            await update.message.reply_text(
+                f"✅ Target User: <code>{target_id}</code>\n\n"
+                "এখন যে <b>মেসেজ</b> পাঠাতে চান সেটা লিখে পাঠান:",
+                parse_mode="HTML",
+            )
+            return
+
+        # Boardchat: Message
+        if context.user_data.get("waiting_boardchat_message"):
+            target_id = context.user_data.get("boardchat_target")
+            message_text = text.strip()
+
+            if not target_id or not message_text:
+                await update.message.reply_text("⚠️ কিছু সমস্যা হয়েছে। আবার চেষ্টা করুন।")
+                context.user_data.clear()
+                return
+
+            context.user_data.pop("waiting_boardchat_message", None)
+            context.user_data.pop("boardchat_target", None)
+
+            try:
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text=message_text,
+                    parse_mode="HTML",
+                )
+                await update.message.reply_text(
+                    f"✅ <b>মেসেজ সফলভাবে পাঠানো হয়েছে!</b>\n\n"
+                    f"👤 User: <code>{target_id}</code>",
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                await update.message.reply_text(
+                    f"❌ মেসেজ পাঠানো যায়নি।\n\n"
+                    f"Error: {safe(str(e))}",
+                    parse_mode="HTML",
+                )
+            return
+
+    # Withdraw destination
     if context.user_data.get("waiting_withdraw_destination"):
         method = context.user_data.get("withdraw_method")
         amount = float(context.user_data.get("withdraw_amount", 0))
@@ -2256,9 +2254,7 @@ async def text_handler(update, context):
         )
         return
 
-    # ========================================================
-    # NORMAL REPLY KEYBOARD
-    # ========================================================
+    # Reply keyboard
     if text in [
         t["generate"],
         "➕ Generate New",
@@ -2287,7 +2283,7 @@ async def text_handler(update, context):
 
 
 # ============================================================
-# ADMIN WITHDRAW PROCESSING
+# ADMIN WITHDRAW
 # ============================================================
 
 async def admin_withdraw_action(update, context):
@@ -2544,32 +2540,26 @@ async def callback_handler(update, context):
     user_id = query.from_user.id
     data = query.data or ""
 
-    # Dashboard
     if data.startswith("dash_"):
         await dashboard_callback(update, context)
         return
 
-    # Admin accept / reject
     if data.startswith("withdraw_accept:") or data.startswith("withdraw_reject:"):
         await admin_withdraw_action(update, context)
         return
 
-    # Rejection reason
     if data.startswith("reject_reason_"):
         await handle_rejection_reason(update, context)
         return
 
-    # Balance zero yes / no
     if data.startswith("withdraw_zero_yes:") or data.startswith("withdraw_zero_no:"):
         await handle_balance_action(update, context)
         return
 
-    # Withdraw method
     if data in ("withdraw_method_binance", "withdraw_method_bep20"):
         await choose_withdraw_method(update, context)
         return
 
-    # Language
     if data.startswith("lang_"):
         lang = data.replace("lang_", "", 1)
         if lang not in TEXT:
@@ -2587,28 +2577,24 @@ async def callback_handler(update, context):
         await generate_new(query.message, user_id, lang)
         return
 
-    # Generate
     if data == "generate":
         await query.answer()
         lang = user_lang(user_id)
         await generate_new(query.message, user_id, lang)
         return
 
-    # Inbox
     if data == "inbox":
         await query.answer()
         lang = user_lang(user_id)
         await show_inbox(query.message, user_id, lang)
         return
 
-    # Refresh
     if data == "refresh":
         await query.answer()
         lang = user_lang(user_id)
         await show_inbox(query.message, user_id, lang)
         return
 
-    # Withdraw
     if data == "withdraw":
         await withdraw_callback(update, context)
         return
@@ -2617,7 +2603,7 @@ async def callback_handler(update, context):
 
 
 # ============================================================
-# STATS
+# STATS / ADMIN / BROADCAST
 # ============================================================
 
 async def stats_command(update, context):
@@ -2656,10 +2642,6 @@ async def stats_command(update, context):
         parse_mode="HTML",
     )
 
-
-# ============================================================
-# ADMIN
-# ============================================================
 
 async def admin_only(update):
     user_id = update.effective_user.id
@@ -2718,7 +2700,7 @@ async def broadcast_command(update, context):
 
 
 # ============================================================
-# AUTOMATIC INBOX
+# AUTO INBOX
 # ============================================================
 
 async def auto_inbox_job(context):
@@ -2773,17 +2755,9 @@ async def auto_inbox_job(context):
         await asyncio.sleep(0.05)
 
 
-# ============================================================
-# ERROR
-# ============================================================
-
 async def error_handler(update, context):
     logger.error("Unhandled error", exc_info=context.error)
 
-
-# ============================================================
-# POST INIT
-# ============================================================
 
 async def post_init(application):
     init_reward_db()
@@ -2816,7 +2790,6 @@ def main():
         .build()
     )
 
-    # Commands
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("inbox", inbox_command))
     application.add_handler(CommandHandler("refresh", refresh_command))
@@ -2829,17 +2802,15 @@ def main():
     application.add_handler(CommandHandler("withdraw", withdraw_command))
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CommandHandler("broadcast", broadcast_command))
-    application.add_handler(CommandHandler("boardchat", broadcast_command))
+    application.add_handler(CommandHandler("boardchat", boardchat_command))
     application.add_handler(CommandHandler("dashboard", dashboard_command))
-# Callback
+
     application.add_handler(CallbackQueryHandler(callback_handler))
 
-    # Text
     application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler)
+        MessageHandler(filters.TEXT & \~filters.COMMAND, text_handler)
     )
 
-    # Error
     application.add_error_handler(error_handler)
 
     print("🤖 Temp Mail Bot is running...")
